@@ -333,6 +333,11 @@ function Board:updateSlideUpAnimation()
     self.slideUpAnimation = nil
 end
 
+-- せり上げアニメーションが終了したかどうか.
+function Board:isEndSlidingUp()
+	return self.slideUpAnimation == nil
+end
+
 function Board:getSlideUpDrawOffset(col, row)
     if self.slideUpAnimation == nil then
         return 0, 0

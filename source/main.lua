@@ -56,6 +56,7 @@ local GAMESTATE = {
 	PLAYING = 0, -- プレイヤー操作中.
 	CHECK_ERASE = 1, -- 消去判定中.
 	ERASING = 2, -- 消去アニメーション中.
+	SLIDEUP = 3, -- せり上げアニメーション中.
 }
 
 -- ゲームの状態を管理する変数.
@@ -79,8 +80,8 @@ function _updatePlaying()
 	elseif pd.buttonJustPressed(pd.kButtonB) then
 		-- 新しいブロックを出現.
 		board:slideUpNewRow()
-		-- 消去チェックへ.
-		gameState = GAMESTATE.CHECK_ERASE
+		-- せり上げアニメーション中に移行.
+		gameState = GAMESTATE.SLIDEUP
 	end	
 end
 
@@ -114,6 +115,14 @@ function _updateErasing()
 	end
 end
 
+function _updateSlideUp()
+	-- せり上げアニメーションの更新.
+	if board:isEndSlidingUp() then
+		-- せり上げアニメーションが終了したら、消去判定へ.
+		gameState = GAMESTATE.CHECK_ERASE
+	end
+end
+
 function playdate.update()
     gfx.clear(gfx.kColorWhite)
 
@@ -128,6 +137,9 @@ function playdate.update()
 	elseif gameState == GAMESTATE.ERASING then
 		-- 消去アニメーション中の処理.
 		_updateErasing()
+	elseif gameState == GAMESTATE.SLIDEUP then
+		-- せり上げアニメーション中の処理.
+		_updateSlideUp()
 	end
 
 	-- 盤面の更新と描画.
