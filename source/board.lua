@@ -82,14 +82,17 @@ function Board:init(config)
         end
     end
 
-        self.currentColumnAngleOffset = self.config.columnAngleOffsetColumns
-        self.targetColumnAngleOffset = self.config.columnAngleOffsetColumns
+    self.currentColumnAngleOffset = self.config.columnAngleOffsetColumns
+    self.targetColumnAngleOffset = self.config.columnAngleOffsetColumns
     self.cells = Array2D(self.config.columns, self.config.depth, BLOCK.EMPTY)
 	self.mode = BOARD_MODE.VERTICAL_SWAP -- 現在は縦入れ替えモードのみ.
     self.swapDrawAnimation = nil
-        self.eraseBlinkAnimation = nil
+    self.eraseBlinkAnimation = nil
     self.slideUpAnimation = nil
-    	self.boardGuideEllipseCache = self:buildBoardGuideEllipseCache()
+	self.framePointCache = {}
+	self.frameCellCenterCache = {}
+	self:buildRowRadiusCache()
+    self.boardGuideEllipseCache = self:buildBoardGuideEllipseCache()
 	self:setCursor(1, 1) -- カーソル位置を設定.
     self:randomize()
 end
@@ -136,6 +139,7 @@ end
 
 -- 盤面の描画.
 function Board:draw()
+    self:rebuildFrameGeometryCache()
 	-- ガイド線の描画.
     self:drawBoardGuide()
 	-- ブロックの描画.
@@ -157,20 +161,28 @@ function Board:isValidRow(row)
 end
 
 function Board:getCellCenter(col, row)
+    local rowCache = self.frameCellCenterCache[row]
+    if rowCache ~= nil then
+        local center = rowCache[col]
+        if center ~= nil then
+            return center.x, center.y
+        end
+    end
+
     local outerLeftX, outerLeftY, outerRightX, outerRightY,
         innerLeftX, innerLeftY, innerRightX, innerRightY = self:getCellCorners(col, row)
-
-    local centerX = (outerLeftX + outerRightX + innerLeftX + innerRightX) * 0.25
-    local centerY = (outerLeftY + outerRightY + innerLeftY + innerRightY) * 0.25
-    return centerX, centerY
+    return (outerLeftX + outerRightX + innerLeftX + innerRightX) * 0.25,
+           (outerLeftY + outerRightY + innerLeftY + innerRightY) * 0.25
 end
 
 function Board:startSwapDrawAnimation(colA, rowA, colB, rowB)
+    local indexA = self.cells:_get_index(colA, rowA)
+    local indexB = self.cells:_get_index(colB, rowB)
     self.swapDrawAnimation = {
         progress = 1.0,
-        cells = {
-            { col = colA, row = rowA, fromCol = colB, fromRow = rowB },
-            { col = colB, row = rowB, fromCol = colA, fromRow = rowA }
+        byIndex = {
+            [indexA] = { col = colA, row = rowA, fromCol = colB, fromRow = rowB },
+            [indexB] = { col = colB, row = rowB, fromCol = colA, fromRow = rowA }
         }
     }
 end
@@ -187,21 +199,100 @@ function Board:updateSwapDrawAnimation()
 end
 
 function Board:getCellDrawOffset(col, row)
-    if self.swapDrawAnimation == nil then
+    local animation = self.swapDrawAnimation
+    if animation == nil then
         return 0, 0 -- アニメーション中でない.
     end
 
-    for _, animCell in ipairs(self.swapDrawAnimation.cells) do
-        if animCell.col == col and animCell.row == row then
-            local dstX, dstY = self:getCellCenter(col, row)
-            local srcX, srcY = self:getCellCenter(animCell.fromCol, animCell.fromRow)
-            local eased = self.swapDrawAnimation.progress * self.swapDrawAnimation.progress
-            local scale = self.config.swapDrawOffsetScale
-            return (srcX - dstX) * eased * scale, (srcY - dstY) * eased * scale
+    local index = self.cells:_get_index(col, row)
+    local animCell = animation.byIndex[index]
+    if animCell == nil then
+        return 0, 0
+    end
+
+    local dstX, dstY = self:getCellCenter(col, row)
+    local srcX, srcY = self:getCellCenter(animCell.fromCol, animCell.fromRow)
+    local eased = animation.progress * animation.progress
+    local scale = self.config.swapDrawOffsetScale
+    return (srcX - dstX) * eased * scale, (srcY - dstY) * eased * scale
+end
+
+function Board:buildRowRadiusCache()
+    local config = self.config
+    local outerRx = config.width / 2
+    local outerRy = config.height / 2
+    local depth = config.depth
+    local scaleDelta = 1.0 - config.innerScale
+
+    self.rowRadiusCache = {}
+    for boundary = -1, depth + 1 do
+        local t = boundary / depth
+        local scale = 1.0 - scaleDelta * t
+        self.rowRadiusCache[boundary] = {
+            rx = outerRx * scale,
+            ry = outerRy * scale
+        }
+    end
+end
+
+function Board:rebuildFrameGeometryCache()
+    local config = self.config
+    local columns = config.columns
+    local depth = config.depth
+    local cx = config.cx
+    local cy = config.cy
+    local twoPi = math.pi * 2
+    local offsetColumns = (self.currentColumnAngleOffset or config.columnAngleOffsetColumns or 0) - 1
+    local framePointCache = self.framePointCache
+    local frameCellCenterCache = self.frameCellCenterCache
+
+    for colBoundary = 0, columns do
+        local angle = (colBoundary + offsetColumns) / columns * twoPi - math.pi / 2
+        local cosAngle = math.cos(angle)
+        local sinAngle = math.sin(angle)
+        local columnCache = framePointCache[colBoundary]
+        if columnCache == nil then
+            columnCache = {}
+            framePointCache[colBoundary] = columnCache
+        end
+
+        for rowBoundary = -1, depth + 1 do
+            local radius = self.rowRadiusCache[rowBoundary]
+            local point = columnCache[rowBoundary]
+            if point == nil then
+                point = {}
+                columnCache[rowBoundary] = point
+            end
+
+            point.x = cx + cosAngle * radius.rx
+            point.y = cy + sinAngle * radius.ry
         end
     end
 
-    return 0, 0
+    for row = 0, depth + 1 do
+        local rowCache = frameCellCenterCache[row]
+        if rowCache == nil then
+            rowCache = {}
+            frameCellCenterCache[row] = rowCache
+        end
+
+        local outerBoundary = row - 1
+        local innerBoundary = row
+        for col = 1, columns do
+            local outerLeft = framePointCache[col - 1][outerBoundary]
+            local outerRight = framePointCache[col][outerBoundary]
+            local innerLeft = framePointCache[col - 1][innerBoundary]
+            local innerRight = framePointCache[col][innerBoundary]
+            local center = rowCache[col]
+            if center == nil then
+                center = {}
+                rowCache[col] = center
+            end
+
+            center.x = (outerLeft.x + outerRight.x + innerLeft.x + innerRight.x) * 0.25
+            center.y = (outerLeft.y + outerRight.y + innerLeft.y + innerRight.y) * 0.25
+        end
+    end
 end
 
 function Board:startSlideUpAnimation()
@@ -678,6 +769,11 @@ function Board:ellipsePoint(cx, cy, rx, ry, angle)
 end
 
 function Board:getRowBoundaryRadius(boundary)
+    local radius = self.rowRadiusCache[boundary]
+    if radius ~= nil then
+        return radius.rx, radius.ry
+    end
+
     local outerRx = self.config.width / 2
     local outerRy = self.config.height / 2
     local t = boundary / self.config.depth
@@ -697,6 +793,18 @@ function Board:getCellCorners(col, row)
     local rightBoundary = col
     local outerBoundary = row - 1
     local innerBoundary = row
+    local framePointCache = self.framePointCache
+
+    if framePointCache[leftBoundary] ~= nil and framePointCache[rightBoundary] ~= nil then
+        local outerLeft = framePointCache[leftBoundary][outerBoundary]
+        local outerRight = framePointCache[rightBoundary][outerBoundary]
+        local innerLeft = framePointCache[leftBoundary][innerBoundary]
+        local innerRight = framePointCache[rightBoundary][innerBoundary]
+        if outerLeft ~= nil and outerRight ~= nil and innerLeft ~= nil and innerRight ~= nil then
+            return outerLeft.x, outerLeft.y, outerRight.x, outerRight.y,
+                   innerLeft.x, innerLeft.y, innerRight.x, innerRight.y
+        end
+    end
 
     local leftAngle = self:getColumnBoundaryAngle(leftBoundary)
     local rightAngle = self:getColumnBoundaryAngle(rightBoundary)
@@ -775,18 +883,11 @@ function Board:drawBoardGuide()
     end
     end
 
-    for c = 1, self.config.columns do
-        local angle = self:getColumnBoundaryAngle(c - 1)
-
-        local outerRx = self.config.width / 2
-        local outerRy = self.config.height / 2
-        local innerRx = outerRx * self.config.innerScale
-        local innerRy = outerRy * self.config.innerScale
-
-        local x1, y1 = self:ellipsePoint(self.config.cx, self.config.cy, outerRx, outerRy, angle)
-        local x2, y2 = self:ellipsePoint(self.config.cx, self.config.cy, innerRx, innerRy, angle)
-
-        gfx.drawLine(x1, y1, x2, y2)
+    local framePointCache = self.framePointCache
+    for c = 0, self.config.columns - 1 do
+        local outer = framePointCache[c][0]
+        local inner = framePointCache[c][self.config.depth]
+        gfx.drawLine(outer.x, outer.y, inner.x, inner.y)
     end
 end
 
@@ -824,25 +925,6 @@ function Board:drawGunpeyBlock(col, row, blockType, offsetX, offsetY)
 	innerLeftX, innerLeftY = innerLeftX + offsetX, innerLeftY + offsetY
 	innerRightX, innerRightY = innerRightX + offsetX, innerRightY + offsetY
 
-    local leftMidX = (outerLeftX + innerLeftX) * 0.5
-    local leftMidY = (outerLeftY + innerLeftY) * 0.5
-    local rightMidX = (outerRightX + innerRightX) * 0.5
-    local rightMidY = (outerRightY + innerRightY) * 0.5
-
-    local outerMidX = (outerLeftX + outerRightX) * 0.5
-    local outerMidY = (outerLeftY + outerRightY) * 0.5
-    local innerMidX = (innerLeftX + innerRightX) * 0.5
-    local innerMidY = (innerLeftY + innerRightY) * 0.5
-
-    local valleyT = self:clamp01(self.config.valleyHeightRatio)
-    local peakT = self:clamp01(self.config.peakHeightRatio)
-    local valleyApexX = self:lerp(outerMidX, innerMidX, valleyT)
-    local valleyApexY = self:lerp(outerMidY, innerMidY, valleyT)
-    local peakApexX = self:lerp(outerMidX, innerMidX, peakT)
-    local peakApexY = self:lerp(outerMidY, innerMidY, peakT)
-
-    gfx.setLineWidth(self.config.lineWidth)
-
 	-- 各ブロック種別ごとの描画処理.
     if blockType == BLOCK.SLASH then
         gfx.drawLine(innerLeftX, innerLeftY, outerRightX, outerRightY)
@@ -851,10 +933,24 @@ function Board:drawGunpeyBlock(col, row, blockType, offsetX, offsetY)
         gfx.drawLine(outerLeftX, outerLeftY, innerRightX, innerRightY)
 
     elseif blockType == BLOCK.VALLEY then
+        local outerMidX = (outerLeftX + outerRightX) * 0.5
+        local outerMidY = (outerLeftY + outerRightY) * 0.5
+        local innerMidX = (innerLeftX + innerRightX) * 0.5
+        local innerMidY = (innerLeftY + innerRightY) * 0.5
+        local valleyT = self.config.valleyHeightRatio
+        local valleyApexX = outerMidX + (innerMidX - outerMidX) * valleyT
+        local valleyApexY = outerMidY + (innerMidY - outerMidY) * valleyT
         gfx.drawLine(outerLeftX, outerLeftY, valleyApexX, valleyApexY)
         gfx.drawLine(outerRightX, outerRightY, valleyApexX, valleyApexY)
 
     elseif blockType == BLOCK.PEAK then
+        local outerMidX = (outerLeftX + outerRightX) * 0.5
+        local outerMidY = (outerLeftY + outerRightY) * 0.5
+        local innerMidX = (innerLeftX + innerRightX) * 0.5
+        local innerMidY = (innerLeftY + innerRightY) * 0.5
+        local peakT = self.config.peakHeightRatio
+        local peakApexX = outerMidX + (innerMidX - outerMidX) * peakT
+        local peakApexY = outerMidY + (innerMidY - outerMidY) * peakT
         gfx.drawLine(innerLeftX, innerLeftY, peakApexX, peakApexY)
         gfx.drawLine(innerRightX, innerRightY, peakApexX, peakApexY)
     end
@@ -862,6 +958,7 @@ end
 
 -- ブロックの描画.
 function Board:drawBlocks()
+    gfx.setLineWidth(self.config.lineWidth)
     for r = 1, self.config.depth do
         for c = 1, self.config.columns do
 			if self:isCellBlinkHidden(c, r) then
