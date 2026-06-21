@@ -225,34 +225,26 @@ function Board:updateBoardRotation()
     local diff = self.targetColumnAngleOffset - self.currentColumnAngleOffset
     local step = self.config.cursorFollowRotationStep
 
-	self.currentColumnAngleOffset += diff * step
-
-	--[[
-    if math.abs(diff) <= step then
-        self.currentColumnAngleOffset = self.targetColumnAngleOffset
-        return
-    end
-
-    if diff > 0 then
-        self.currentColumnAngleOffset = self.currentColumnAngleOffset + step
-    else
-        self.currentColumnAngleOffset = self.currentColumnAngleOffset - step
-    end
-	--]]
+	-- 割合で補間します.
+	self.currentColumnAngleOffset += (diff * step)
 end
 
+-- カーソルを左に移動.
 function Board:moveCursorLeft()
     self:moveCursorBy(-1, 0)
 end
 
+-- カーソルを右に移動.
 function Board:moveCursorRight()
     self:moveCursorBy(1, 0)
 end
 
+-- カーソルを上に移動.
 function Board:moveCursorUp()
     self:moveCursorBy(0, -1)
 end
 
+-- カーソルを下に移動.
 function Board:moveCursorDown()
     self:moveCursorBy(0, 1)
 end
@@ -267,6 +259,16 @@ function Board:swapCells(dx, dy)
 
     self.cells:swap(x1, y1, x2, y2, false, false)
     self:startSwapDrawAnimation(x1, y1, x2, y2)
+end
+
+-- 全体をせり上げて新しいパネルを出現させる.
+function Board:slideUpNewRow()
+	-- 全体をスライド.
+	self.cells:slideY(-1)
+	-- 最下段に新しいパネルをランダムで生成.
+	for col = 1, self.config.columns do
+		self.cells:set(col, self.config.depth, math.random(1, 4))
+	end
 end
 
 -- 接続チェックをするためのノードキーを取得する.
@@ -334,10 +336,10 @@ function Board:buildCellGraph()
                 local edges = self:getCellEdges(col, row, blockType)
                 local nodeSet = {}
 
-				print(string.format("Cell (%d, %d) [Index: %d] BlockType: %d Edges: %d", col, row, index, blockType, #edges))
-				for i, edge in ipairs(edges) do
-					print(string.format("  Edge %d: %s -- %s", i, edge[1], edge[2]))
-				end
+				-- print(string.format("Cell (%d, %d) [Index: %d] BlockType: %d Edges: %d", col, row, index, blockType, #edges))
+				-- for i, edge in ipairs(edges) do
+				-- 	print(string.format("  Edge %d: %s -- %s", i, edge[1], edge[2]))
+				-- end
 
                 for _, edge in ipairs(edges) do
                     local a, b = edge[1], edge[2]

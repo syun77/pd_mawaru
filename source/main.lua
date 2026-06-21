@@ -40,7 +40,13 @@ function playdate.update()
 				print(string.format("  消す位置: (%d, %d)", pos.x, pos.y))
 			end
 		end
-		board:eraseByList(eraseList)
+		if #eraseList.groups > 0 then
+			-- 消去実行.
+			board:eraseByList(eraseList)
+		else
+			-- 新しいブロックを出現.
+			board:slideUpNewRow()
+		end
 	end	
 
 	-- 盤面の更新と描画.

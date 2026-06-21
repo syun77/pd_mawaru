@@ -82,3 +82,46 @@ function Array2D:swap(x1, y1, x2, y2, bLoopX, bLoopY)
 	local index2 = self:_get_index(x2, y2)
 	self.data[index1], self.data[index2] = self.data[index2], self.data[index1]
 end
+
+function Array2D:foreach(func, bReverse)
+	if bReverse then
+		-- 逆順foreach.
+		for y = self.height, 1, -1 do
+			for x = self.width, 1, -1 do
+				func(x, y, self:get(x, y))
+			end
+		end
+	else
+		-- 通常foreach.
+		for y = 1, self.height do
+			for x = 1, self.width do
+				func(x, y, self:get(x, y))
+			end
+		end
+	end
+end
+
+-- Y方向にスライドする.
+-- @return 有効なパネルの数を返す.
+function Array2D:slideY(dy)
+	if dy == 0 then return end -- スライド量が0の場合は何もしない
+
+	local ret = 0
+	local bReverse = dy > 0 -- 正の方向にスライドする場合は逆順で処理する
+	self:foreach(function(x, y, v)
+		if v ~= 0 then
+			-- 有効な値がある場合はスライドする.
+			local newY = y + dy
+			if newY >= 1 and newY <= self.height then
+				-- 新しい位置が有効範囲内の場合は値を移動する.
+				self:set(x, newY, v)
+				self:set(x, y, 0) -- 元の位置をクリアする
+				ret += 1
+			else
+				-- 新しい位置が範囲外の場合は値を消す.
+				self:set(x, y, 0)
+			end
+		end
+	end, bReverse)
+	return ret
+end
