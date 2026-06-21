@@ -86,6 +86,7 @@ function Board:init(config)
     self.cells = Array2D(self.config.columns, self.config.depth, BLOCK.EMPTY)
 	self.mode = BOARD_MODE.VERTICAL_SWAP -- 現在は縦入れ替えモードのみ.
     self.swapDrawAnimation = nil
+        self.eraseBlinkAnimation = nil
     	self.boardGuideEllipseCache = self:buildBoardGuideEllipseCache()
 	self:setCursor(1, 1) -- カーソル位置を設定.
     self:randomize()
@@ -125,6 +126,8 @@ function Board:update()
     self:updateBoardRotation()
 	-- 入れ替えアニメーションの更新.
     self:updateSwapDrawAnimation()
+    -- 消去前の点滅アニメーション更新.
+    self:updateEraseBlinkAnimation()
 end
 
 -- 盤面の描画.
@@ -195,6 +198,72 @@ function Board:getCellDrawOffset(col, row)
     end
 
     return 0, 0
+end
+
+function Board:buildEraseIndexSet(eraseList)
+    local indexSet = {}
+
+    if eraseList == nil or eraseList:isEmpty() then
+        return indexSet
+    end
+
+    for _, group in ipairs(eraseList.groups) do
+        for _, index in ipairs(group.indices) do
+            indexSet[index] = true
+        end
+    end
+
+    return indexSet
+end
+
+function Board:startEraseBlinkAnimation(eraseList)
+    if eraseList == nil or eraseList:isEmpty() then
+        return false
+    end
+
+	-- 消去アニメーション設定.
+    self.eraseBlinkAnimation = {
+        remainingFrames = 24, -- 24Fで終了.
+        tick = 0,
+        visible = true,
+        indexSet = self:buildEraseIndexSet(eraseList),
+        eraseList = eraseList
+    }
+
+    return true
+end
+
+function Board:updateEraseBlinkAnimation()
+    if self.eraseBlinkAnimation == nil then
+        return
+    end
+
+    local animation = self.eraseBlinkAnimation
+    animation.remainingFrames = animation.remainingFrames - 1
+    animation.tick = animation.tick + 1
+
+    if (animation.tick % 4) == 0 then
+        animation.visible = not animation.visible
+    end
+
+    if animation.remainingFrames <= 0 then
+        self:eraseByList(animation.eraseList)
+        self.eraseBlinkAnimation = nil
+    end
+end
+
+function Board:isEndEraseAnimation()
+	return self.eraseBlinkAnimation == nil
+end
+
+function Board:isCellBlinkHidden(col, row)
+    local animation = self.eraseBlinkAnimation
+    if animation == nil or animation.visible then
+        return false
+    end
+
+    local index = self.cells:_get_index(col, row)
+    return animation.indexSet[index] == true
 end
 
 function Board:setCursor(x, y)
@@ -610,7 +679,7 @@ function Board:buildBoardGuideEllipseCache()
 end
 
 function Board:drawEllipsePolylineAt(cx, cy, rx, ry)
-    local steps = 320
+    local steps = 320 -- 円周を分割するステップ数。大きいほど滑らかになるが描画コストも上がる.
     local dash = 2 -- 描く区間
     local gap  = 2 -- 空ける区間
 
@@ -736,8 +805,12 @@ end
 function Board:drawBlocks()
     for r = 1, self.config.depth do
         for c = 1, self.config.columns do
+			if self:isCellBlinkHidden(c, r) then
+				goto continue
+			end
 			local offsetX, offsetY = self:getCellDrawOffset(c, r)
             self:drawGunpeyBlock(c, r, self.cells:get(c, r), offsetX, offsetY)
+			::continue::
         end
     end
 end

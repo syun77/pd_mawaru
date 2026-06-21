@@ -51,11 +51,17 @@ function isJustPressedRight()
 	return false
 end
 
-function playdate.update()
-    gfx.clear(gfx.kColorWhite)
+-- ゲームの状態を管理するための列挙型.
+local GAMESTATE = {
+	PLAYING = 0, -- プレイヤー操作中.
+	CHECK_ERASE = 1, -- 消去判定中.
+	ERASING = 2, -- 消去アニメーション中.
+}
 
-    gfx.setColor(gfx.kColorBlack)
+-- ゲームの状態を管理する変数.
+local gameState = GAMESTATE.CHECK_ERASE
 
+function _updatePlaying()
 	-- カーソルの移動.
 	if pd.buttonJustPressed(pd.kButtonUp) then
 		board:moveCursorUp()
@@ -68,24 +74,61 @@ function playdate.update()
 	elseif pd.buttonJustPressed(pd.kButtonA) then
 		-- カーソル位置のパネルと上隣のパネルを交換する.
 		board:swapCells(0, -1)
+		-- 消去チェックへ.
+		gameState = GAMESTATE.CHECK_ERASE
 	elseif pd.buttonJustPressed(pd.kButtonB) then
-		local eraseList = board:checkEraseList()
-		print("消すリストの数: " .. #eraseList.groups)
-		for groupIndex, group in ipairs(eraseList.groups) do
-			print(string.format("グループ %d のセル数: %d", groupIndex, #group.indices))
-			for _, index in ipairs(group.indices) do
-				local pos = board:convertIndexToPosition(index)
-				print(string.format("  消す位置: (%d, %d)", pos.x, pos.y))
-			end
-		end
-		if #eraseList.groups > 0 then
-			-- 消去実行.
-			board:eraseByList(eraseList)
-		else
-			-- 新しいブロックを出現.
-			board:slideUpNewRow()
-		end
+		-- 新しいブロックを出現.
+		board:slideUpNewRow()
+		-- 消去チェックへ.
+		gameState = GAMESTATE.CHECK_ERASE
 	end	
+end
+
+-- 消去判定.
+function _updateCheckErase()
+	local eraseList = board:checkEraseList()
+	print("消すリストの数: " .. #eraseList.groups)
+	for groupIndex, group in ipairs(eraseList.groups) do
+		print(string.format("グループ %d のセル数: %d", groupIndex, #group.indices))
+		for _, index in ipairs(group.indices) do
+			local pos = board:convertIndexToPosition(index)
+			print(string.format("  消す位置: (%d, %d)", pos.x, pos.y))
+		end
+	end
+	if board:startEraseBlinkAnimation(eraseList) then
+		-- 消すことができた.
+		gameState = GAMESTATE.ERASING
+	else
+		-- 消せないので、プレイヤー操作中に戻す.
+		gameState = GAMESTATE.PLAYING
+	end
+end
+
+function _updateErasing()
+	-- 消去アニメーションの更新.
+	if board:isEndEraseAnimation() then
+		-- 点滅アニメーションが終了したら、ブロックを消去する.
+		-- board:eraseBlocks()
+		-- ゲーム状態をプレイヤー操作中に戻す.
+		gameState = GAMESTATE.PLAYING
+	end
+end
+
+function playdate.update()
+    gfx.clear(gfx.kColorWhite)
+
+    gfx.setColor(gfx.kColorBlack)
+
+	if gameState == GAMESTATE.PLAYING then
+		-- プレイヤー操作中の処理.
+		_updatePlaying()
+	elseif gameState == GAMESTATE.CHECK_ERASE then
+		-- 消去判定中の処理.
+		_updateCheckErase()
+	elseif gameState == GAMESTATE.ERASING then
+		-- 消去アニメーション中の処理.
+		_updateErasing()
+	end
 
 	-- 盤面の更新と描画.
 	board:update()
@@ -93,6 +136,8 @@ function playdate.update()
 
 	-- FPS.
     playdate.drawFPS(4, 4)
-	-- カーソル位置の描画。
+	-- カーソル位置の描画.
 	playdate.graphics.drawText(string.format("Cursor: (%d, %d)", board.cursorX, board.cursorY), 4, 20)
+	-- 状態の描画.
+	playdate.graphics.drawText(string.format("GameState: %d", gameState), 4, 240-20)
 end
