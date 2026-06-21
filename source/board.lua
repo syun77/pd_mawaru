@@ -70,6 +70,7 @@ function Board:init(config)
         cursorFollowRotationStep = 0.2,
         swapDrawOffsetScale = 0.7,
         swapDrawAnimationStep = 0.2,
+        slideUpAnimationStep = 0.2,
         innerScale = 0.35,
         lineWidth = 2,
         nodeRadius = 2
@@ -87,6 +88,7 @@ function Board:init(config)
 	self.mode = BOARD_MODE.VERTICAL_SWAP -- 現在は縦入れ替えモードのみ.
     self.swapDrawAnimation = nil
         self.eraseBlinkAnimation = nil
+    self.slideUpAnimation = nil
     	self.boardGuideEllipseCache = self:buildBoardGuideEllipseCache()
 	self:setCursor(1, 1) -- カーソル位置を設定.
     self:randomize()
@@ -128,6 +130,8 @@ function Board:update()
     self:updateSwapDrawAnimation()
     -- 消去前の点滅アニメーション更新.
     self:updateEraseBlinkAnimation()
+	-- せり上げアニメーション更新.
+	self:updateSlideUpAnimation()
 end
 
 -- 盤面の描画.
@@ -198,6 +202,66 @@ function Board:getCellDrawOffset(col, row)
     end
 
     return 0, 0
+end
+
+function Board:startSlideUpAnimation()
+    if self.slideUpAnimation ~= nil then
+        return false
+    end
+
+    local incomingRow = {}
+    for col = 1, self.config.columns do
+        incomingRow[col] = math.random(1, 4)
+    end
+
+    self.slideUpAnimation = {
+        progress = 0,
+        incomingRow = incomingRow
+    }
+
+    return true
+end
+
+function Board:updateSlideUpAnimation()
+    if self.slideUpAnimation == nil then
+        return
+    end
+
+    local animation = self.slideUpAnimation
+    animation.progress = animation.progress + self.config.slideUpAnimationStep
+
+    if animation.progress < 1 then
+        return
+    end
+
+    self.cells:slideY(-1)
+    for col = 1, self.config.columns do
+        self.cells:set(col, self.config.depth, animation.incomingRow[col])
+    end
+
+    self.slideUpAnimation = nil
+end
+
+function Board:getSlideUpDrawOffset(col, row)
+    if self.slideUpAnimation == nil then
+        return 0, 0
+    end
+
+    local progress = self.slideUpAnimation.progress
+    local srcX, srcY = self:getCellCenter(col, row)
+    local dstX, dstY = self:getCellCenter(col, row - 1)
+    return (dstX - srcX) * progress, (dstY - srcY) * progress
+end
+
+function Board:getIncomingSlideUpOffset(col)
+    if self.slideUpAnimation == nil then
+        return 0, 0
+    end
+
+    local progress = self.slideUpAnimation.progress
+    local srcX, srcY = self:getCellCenter(col, self.config.depth + 1)
+    local dstX, dstY = self:getCellCenter(col, self.config.depth)
+    return (srcX - dstX) * (1 - progress), (srcY - dstY) * (1 - progress)
 end
 
 function Board:buildEraseIndexSet(eraseList)
@@ -333,12 +397,7 @@ end
 
 -- 全体をせり上げて新しいパネルを出現させる.
 function Board:slideUpNewRow()
-	-- 全体をスライド.
-	self.cells:slideY(-1)
-	-- 最下段に新しいパネルをランダムで生成.
-	for col = 1, self.config.columns do
-		self.cells:set(col, self.config.depth, math.random(1, 4))
-	end
+    self:startSlideUpAnimation()
 end
 
 -- 接続チェックをするためのノードキーを取得する.
@@ -808,9 +867,18 @@ function Board:drawBlocks()
 			if self:isCellBlinkHidden(c, r) then
 				goto continue
 			end
-			local offsetX, offsetY = self:getCellDrawOffset(c, r)
-            self:drawGunpeyBlock(c, r, self.cells:get(c, r), offsetX, offsetY)
+            local offsetX, offsetY = self:getCellDrawOffset(c, r)
+            local slideX, slideY = self:getSlideUpDrawOffset(c, r)
+            self:drawGunpeyBlock(c, r, self.cells:get(c, r), offsetX + slideX, offsetY + slideY)
 			::continue::
+        end
+    end
+
+    if self.slideUpAnimation ~= nil then
+        for c = 1, self.config.columns do
+            local blockType = self.slideUpAnimation.incomingRow[c]
+            local incomingOffsetX, incomingOffsetY = self:getIncomingSlideUpOffset(c)
+            self:drawGunpeyBlock(c, self.config.depth, blockType, incomingOffsetX, incomingOffsetY)
         end
     end
 end
