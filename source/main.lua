@@ -13,18 +13,6 @@ local sprite <const> = gfx.sprite
 local gameContext = GameContext.getInstance()
 gameContext:setup()
 
-function pd.update()
-    gfx.clear()
-	sprite.update() -- すべてのスプライトを更新と描画.
-
-
-
-	-- ショットの数を画面に表示.
-	gfx.drawText("Test MAWARU", 10, 30)
-end
-
-import "CoreLibs/graphics"
-
 local SCREEN_W <const> = 400
 local SCREEN_H <const> = 240
 
@@ -51,17 +39,24 @@ local board = {
     -- 円周方向の分割数
     columns = 16,
 
+    -- 山型・谷型の頂点位置比率（0.0=外側, 1.0=内側）
+    valleyHeightRatio = 0.6,
+    peakHeightRatio = 0.2,
+
     lineWidth = 2,
     nodeRadius = 2
 }
 
+local INNER_SCALE <const> = 0.35
+
 -- 仮の盤面データ [depth][columns]
 local cells = Array2D(board.columns, board.depth, BLOCK.EMPTY)
 
+-- テストデータ.
 for r = 1, board.depth do
     for c = 1, board.columns do
-        --cells:set(c, r, math.random(0, 4)) -- 0から4のランダムなブロック種別を設定
-		cells:set(c, r, BLOCK.BACKSLASH) -- テスト用にすべて空にする.
+        cells:set(c, r, math.random(0, 4)) -- 0から4のランダムなブロック種別を設定
+		--cells:set(c, r, BLOCK.BACKSLASH) -- テスト用にすべて同じにする.
     end
 end
 
@@ -74,12 +69,42 @@ local function getCellEllipseRadius(row)
     local outerRx = board.width / 2
     local outerRy = board.height / 2
 
-    local innerScale = 0.35
     local t = (row - 0.5) / board.depth
 
-    local scale = 1.0 - (1.0 - innerScale) * t
+    local scale = 1.0 - (1.0 - INNER_SCALE) * t
 
     return outerRx * scale, outerRy * scale
+end
+
+local function getRowBoundaryRadius(boundary)
+    local outerRx = board.width / 2
+    local outerRy = board.height / 2
+    local t = boundary / board.depth
+    local scale = 1.0 - (1.0 - INNER_SCALE) * t
+    return outerRx * scale, outerRy * scale
+end
+
+local function getColumnBoundaryAngle(boundary)
+    return boundary / board.columns * math.pi * 2 - math.pi / 2
+end
+
+local function getCellCorners(row, col)
+    local leftBoundary = col - 1
+    local rightBoundary = col
+    local outerBoundary = row - 1
+    local innerBoundary = row
+
+    local leftAngle = getColumnBoundaryAngle(leftBoundary)
+    local rightAngle = getColumnBoundaryAngle(rightBoundary)
+    local outerRx, outerRy = getRowBoundaryRadius(outerBoundary)
+    local innerRx, innerRy = getRowBoundaryRadius(innerBoundary)
+
+    local outerLeftX, outerLeftY = ellipsePoint(board.cx, board.cy, outerRx, outerRy, leftAngle)
+    local outerRightX, outerRightY = ellipsePoint(board.cx, board.cy, outerRx, outerRy, rightAngle)
+    local innerLeftX, innerLeftY = ellipsePoint(board.cx, board.cy, innerRx, innerRy, leftAngle)
+    local innerRightX, innerRightY = ellipsePoint(board.cx, board.cy, innerRx, innerRy, rightAngle)
+
+    return outerLeftX, outerLeftY, outerRightX, outerRightY, innerLeftX, innerLeftY, innerRightX, innerRightY
 end
 
 local function getCellCenter(row, col)
@@ -110,8 +135,8 @@ local function drawBoardGuide()
     gfx.setLineWidth(1)
 
     -- 深さ方向の楕円線
-    for r = 1, board.depth do
-        local rx, ry = getCellEllipseRadius(r)
+    for b = 0, board.depth do
+        local rx, ry = getRowBoundaryRadius(b)
         drawEllipsePolyline(rx, ry)
     end
 
@@ -121,8 +146,8 @@ local function drawBoardGuide()
 
         local outerRx = board.width / 2
         local outerRy = board.height / 2
-        local innerRx = outerRx * 0.35
-        local innerRy = outerRy * 0.35
+        local innerRx = outerRx * INNER_SCALE
+        local innerRy = outerRy * INNER_SCALE
 
         local x1, y1 = ellipsePoint(board.cx, board.cy, outerRx, outerRy, angle)
         local x2, y2 = ellipsePoint(board.cx, board.cy, innerRx, innerRy, angle)
@@ -135,71 +160,78 @@ local function drawNode(x, y)
     gfx.fillCircleAtPoint(x, y, board.nodeRadius)
 end
 
+local function clamp01(v)
+    if v < 0 then
+        return 0
+    elseif v > 1 then
+        return 1
+    end
+    return v
+end
+
+local function lerp(a, b, t)
+    return a + (b - a) * t
+end
+
 local function drawGunpeyBlock(row, col, blockType)
     if blockType == BLOCK.EMPTY then
         return
     end
 
-    local x, y, angle = getCellCenter(row, col)
+    local outerLeftX, outerLeftY, outerRightX, outerRightY,
+          innerLeftX, innerLeftY, innerRightX, innerRightY = getCellCorners(row, col)
 
-    -- セルの見かけサイズ
-    local tangentSize = 12
-    local radialSize = 9
+    local leftMidX = (outerLeftX + innerLeftX) * 0.5
+    local leftMidY = (outerLeftY + innerLeftY) * 0.5
+    local rightMidX = (outerRightX + innerRightX) * 0.5
+    local rightMidY = (outerRightY + innerRightY) * 0.5
 
-    local cosA = math.cos(angle)
-    local sinA = math.sin(angle)
+    local outerMidX = (outerLeftX + outerRightX) * 0.5
+    local outerMidY = (outerLeftY + outerRightY) * 0.5
+    local innerMidX = (innerLeftX + innerRightX) * 0.5
+    local innerMidY = (innerLeftY + innerRightY) * 0.5
 
-    -- 接線方向
-    local tx = -sinA
-    local ty = cosA
-
-    -- 半径方向
-    local rx = cosA
-    local ry = sinA
-
-    local leftX  = x - tx * tangentSize
-    local leftY  = y - ty * tangentSize
-    local rightX = x + tx * tangentSize
-    local rightY = y + ty * tangentSize
-
-    local upX    = x - rx * radialSize
-    local upY    = y - ry * radialSize
-    local downX  = x + rx * radialSize
-    local downY  = y + ry * radialSize
-
-    -- セル局所座標の4隅をワールド座標へ変換.
-    local leftUpX = x - tx * tangentSize - rx * radialSize
-    local leftUpY = y - ty * tangentSize - ry * radialSize
-    local rightUpX = x + tx * tangentSize - rx * radialSize
-    local rightUpY = y + ty * tangentSize - ry * radialSize
-    local leftDownX = x - tx * tangentSize + rx * radialSize
-    local leftDownY = y - ty * tangentSize + ry * radialSize
-    local rightDownX = x + tx * tangentSize + rx * radialSize
-    local rightDownY = y + ty * tangentSize + ry * radialSize
+    local valleyT = clamp01(board.valleyHeightRatio)
+    local peakT = clamp01(board.peakHeightRatio)
+    local valleyApexX = lerp(outerMidX, innerMidX, valleyT)
+    local valleyApexY = lerp(outerMidY, innerMidY, valleyT)
+    local peakApexX = lerp(outerMidX, innerMidX, peakT)
+    local peakApexY = lerp(outerMidY, innerMidY, peakT)
 
     gfx.setLineWidth(board.lineWidth)
 
     if blockType == BLOCK.SLASH then
         -- /
-        gfx.drawLine(leftDownX, leftDownY, rightUpX, rightUpY)
+        gfx.drawLine(outerLeftX, outerLeftY, innerRightX, innerRightY)
 
     elseif blockType == BLOCK.BACKSLASH then
         -- \
-        gfx.drawLine(leftUpX, leftUpY, rightDownX, rightDownY)
+        gfx.drawLine(innerLeftX, innerLeftY, outerRightX, outerRightY)
 
     elseif blockType == BLOCK.VALLEY then
-        -- 中央から左右下へ
-        gfx.drawLine(upX, upY, leftDownX, leftDownY)
-        gfx.drawLine(upX, upY, rightDownX, rightDownY)
+        -- 谷型 \/ : 外側の左右角 → 可変頂点
+        gfx.drawLine(outerLeftX, outerLeftY, valleyApexX, valleyApexY)
+        gfx.drawLine(outerRightX, outerRightY, valleyApexX, valleyApexY)
 
     elseif blockType == BLOCK.PEAK then
-        gfx.drawLine(leftUpX, leftUpY, downX, downY)
-        gfx.drawLine(rightUpX, rightUpY, downX, downY)
+        -- 山型 /\ : 内側の左右角 → 可変頂点
+        gfx.drawLine(innerLeftX, innerLeftY, peakApexX, peakApexY)
+        gfx.drawLine(innerRightX, innerRightY, peakApexX, peakApexY)
     end
 
-    -- 接続点を丸で強調
-    drawNode(leftX, leftY)
-    drawNode(rightX, rightY)
+	--[[
+    -- 接続点を丸で強調（VALLEY=外側角, PEAK=内側角, その他=左右辺中点）
+    if blockType == BLOCK.VALLEY then
+        drawNode(outerLeftX, outerLeftY)
+        drawNode(outerRightX, outerRightY)
+    elseif blockType == BLOCK.PEAK then
+        drawNode(innerLeftX, innerLeftY)
+        drawNode(innerRightX, innerRightY)
+    else
+        drawNode(leftMidX, leftMidY)
+        drawNode(rightMidX, rightMidY)
+    end
+	--]]
 end
 
 local function drawBlocks()
