@@ -43,6 +43,8 @@ function playdate.update()
 		board:eraseByList(eraseList)
 	end	
 
+	-- 盤面の更新と描画.
+	board:update()
     board:draw()
 
 	-- FPS.

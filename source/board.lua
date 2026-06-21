@@ -20,8 +20,7 @@ local BLOCK = {
     PEAK = 4        -- /\ 山型.
 }
 
-class("Board").extends()
-
+-- 消去パネル判定用.
 class("ErasePanelGroup").extends()
 
 function ErasePanelGroup:init()
@@ -52,6 +51,8 @@ function ErasePanelList:isEmpty()
     return #self.groups == 0
 end
 
+class("Board").extends()
+
 Board.BLOCK = BLOCK
 
 function Board:init(config)
@@ -66,6 +67,7 @@ function Board:init(config)
         columnAngleOffsetColumns = 0.5,
         valleyHeightRatio = 0.6, -- 谷型の中央の高さ調整用.
         peakHeightRatio = 0.2, -- 山型の中央の高さ調整用. 0に近いほど尖る.
+        cursorFollowRotationStep = 0.2,
         swapDrawOffsetScale = 0.7,
         swapDrawAnimationStep = 0.2,
         innerScale = 0.35,
@@ -79,6 +81,8 @@ function Board:init(config)
         end
     end
 
+        self.currentColumnAngleOffset = self.config.columnAngleOffsetColumns
+        self.targetColumnAngleOffset = self.config.columnAngleOffsetColumns
     self.cells = Array2D(self.config.columns, self.config.depth, BLOCK.EMPTY)
 	self.mode = BOARD_MODE.VERTICAL_SWAP -- 現在は縦入れ替えモードのみ.
     self.swapDrawAnimation = nil
@@ -114,15 +118,26 @@ function Board:indexToCell(index)
     return col, row
 end
 
+-- 盤面の更新.
+function Board:update()
+	-- 盤面の回転.
+    self:updateBoardRotation()
+	-- 入れ替えアニメーションの更新.
+    self:updateSwapDrawAnimation()
+end
+
+-- 盤面の描画.
 function Board:draw()
+	-- ガイド線の描画.
     self:drawBoardGuide()
+	-- ブロックの描画.
     self:drawBlocks()
+	-- カーソルの描画.
     self:drawCursor(self.cursorX, self.cursorY)
 	if self.mode == BOARD_MODE.VERTICAL_SWAP then
 		-- 縦入れ替えモードの場合、カーソルの上のセルもハイライトする.
 		self:drawCursor(self.cursorX, self.cursorY - 1)
 	end
-    self:updateSwapDrawAnimation()
 end
 
 function Board:normalizeColumn(col)
@@ -165,7 +180,7 @@ end
 
 function Board:getCellDrawOffset(col, row)
     if self.swapDrawAnimation == nil then
-        return 0, 0
+        return 0, 0 -- アニメーション中でない.
     end
 
     for _, animCell in ipairs(self.swapDrawAnimation.cells) do
@@ -195,8 +210,35 @@ function Board:getCursor()
     return self.cursorX, self.cursorY
 end
 
+-- カーソル移動.
 function Board:moveCursorBy(dx, dy)
     self:setCursor(self.cursorX + dx, self.cursorY + dy)
+
+    if dx ~= 0 then
+        -- 右移動で左回転、左移動で右回転となるように追従目標を更新する.
+        self.targetColumnAngleOffset = self.targetColumnAngleOffset - dx
+    end
+end
+
+-- 回転の更新.
+function Board:updateBoardRotation()
+    local diff = self.targetColumnAngleOffset - self.currentColumnAngleOffset
+    local step = self.config.cursorFollowRotationStep
+
+	self.currentColumnAngleOffset += diff * step
+
+	--[[
+    if math.abs(diff) <= step then
+        self.currentColumnAngleOffset = self.targetColumnAngleOffset
+        return
+    end
+
+    if diff > 0 then
+        self.currentColumnAngleOffset = self.currentColumnAngleOffset + step
+    else
+        self.currentColumnAngleOffset = self.currentColumnAngleOffset - step
+    end
+	--]]
 end
 
 function Board:moveCursorLeft()
@@ -513,7 +555,9 @@ function Board:getRowBoundaryRadius(boundary)
 end
 
 function Board:getColumnBoundaryAngle(boundary)
-    local offsetColumns = self.config.columnAngleOffsetColumns or 0
+	-- カラムのオフセット.
+    local offsetColumns = self.currentColumnAngleOffset or self.config.columnAngleOffsetColumns or 0
+	offsetColumns -= 1 -- Luaが1始まりなのでオフセットを1減らす.
     return (boundary + offsetColumns) / self.config.columns * math.pi * 2 - math.pi / 2
 end
 
@@ -598,9 +642,10 @@ function Board:lerp(a, b, t)
     return a + (b - a) * t
 end
 
+-- ブロックの描画.
 function Board:drawGunpeyBlock(col, row, blockType, offsetX, offsetY)
     if blockType == BLOCK.EMPTY then
-        return
+        return -- 空のセルは描画しない
     end
 
 	offsetX = offsetX or 0
@@ -633,6 +678,7 @@ function Board:drawGunpeyBlock(col, row, blockType, offsetX, offsetY)
 
     gfx.setLineWidth(self.config.lineWidth)
 
+	-- 各ブロック種別ごとの描画処理.
     if blockType == BLOCK.SLASH then
         gfx.drawLine(innerLeftX, innerLeftY, outerRightX, outerRightY)
 
@@ -649,6 +695,7 @@ function Board:drawGunpeyBlock(col, row, blockType, offsetX, offsetY)
     end
 end
 
+-- ブロックの描画.
 function Board:drawBlocks()
     for r = 1, self.config.depth do
         for c = 1, self.config.columns do
@@ -658,6 +705,7 @@ function Board:drawBlocks()
     end
 end
 
+-- カーソルの描画.
 function Board:drawCursor(cursorX, cursorY)
     local outerLeftX, outerLeftY, outerRightX, outerRightY,
           innerLeftX, innerLeftY, innerRightX, innerRightY = self:getCellCorners(cursorX, cursorY)
