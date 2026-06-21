@@ -28,6 +28,16 @@ function playdate.update()
 	elseif pd.buttonJustPressed(pd.kButtonRight) then
 		board:moveCursorRight()
 	elseif pd.buttonJustPressed(pd.kButtonA) then
+		-- カーソル位置のパネルと上隣のパネルを交換する.
+		board:swapCells(0, -1)
+	elseif pd.buttonJustPressed(pd.kButtonB) then
+		local eraseList = board:checkEraseList()
+		print("消すリストの数: " .. #eraseList)
+		for i, index in ipairs(eraseList) do
+			local pos = board:convertIndexToPosition(index)
+			print(string.format("消す位置: (%d, %d)", pos.x, pos.y))
+		end
+		board:eraseByList(eraseList)
 	end	
 
     board:draw()

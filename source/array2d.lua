@@ -28,6 +28,10 @@ function Array2D:_get_index(x, y)
     return (y - 1) * self.width + x
 end
 
+function Array2D:_getindex(x, y)
+	return self:_get_index(x, y)
+end
+
 -- 値の取得 (get)
 function Array2D:get(x, y)
     local index = self:_get_index(x, y)

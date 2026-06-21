@@ -15,6 +15,36 @@ local BLOCK = {
 
 class("Board").extends()
 
+class("ErasePanelGroup").extends()
+
+function ErasePanelGroup:init()
+    self.indices = {}
+end
+
+function ErasePanelGroup:addIndex(index)
+    table.insert(self.indices, index)
+end
+
+function ErasePanelGroup:isEmpty()
+    return #self.indices == 0
+end
+
+class("ErasePanelList").extends()
+
+function ErasePanelList:init()
+    self.groups = {}
+end
+
+function ErasePanelList:addGroup(group)
+    if group ~= nil and not group:isEmpty() then
+        table.insert(self.groups, group)
+    end
+end
+
+function ErasePanelList:isEmpty()
+    return #self.groups == 0
+end
+
 Board.BLOCK = BLOCK
 
 function Board:init(config)
@@ -53,12 +83,24 @@ function Board:randomize()
     end
 end
 
+function Board:convertIndexToPosition(index)
+	local col = ((index - 1) % self.cells.width) + 1
+	local row = math.floor((index - 1) / self.cells.width) + 1
+	return { x = col, y = row }
+end
+
 function Board:setCell(col, row, blockType)
     self.cells:set(col, row, blockType)
 end
 
 function Board:getCell(col, row)
     return self.cells:get(col, row)
+end
+
+function Board:indexToCell(index)
+    local col = ((index - 1) % self.cells.width) + 1
+    local row = math.floor((index - 1) / self.cells.width) + 1
+    return col, row
 end
 
 function Board:draw()
@@ -95,6 +137,239 @@ end
 
 function Board:moveCursorDown()
     self:moveCursorBy(0, 1)
+end
+
+-- 指定した位置のパネルを交換する.
+function Board:swapCells(dx, dy)
+	local x1, y1 = self.cursorX, self.cursorY
+	local x2, y2 = x1 + dx, y1 + dy
+	self.cells:swap(x1, y1, x2, y2, true, false)
+end
+
+function Board:getNodeKey(rowBoundary, columnBoundary)
+    local normalizedColumn = ((columnBoundary - 1) % self.config.columns) + 1
+    return string.format("%d:%d", rowBoundary, normalizedColumn)
+end
+
+function Board:getCellEdges(row, col, blockType)
+	--[[
+		[outerLeft]  ---- [outerRight]
+		     |              |
+	         |     cell     |
+		     |              |
+		[innerLeft]  ---- [innerRight]
+	--]]
+    local outerLeft  = self:getNodeKey(row - 1, col - 1) -- 左上の境界点
+    local outerRight = self:getNodeKey(row - 1, col)     -- 右上の境界点
+    local innerLeft  = self:getNodeKey(row,     col - 1) -- 左下の境界点
+    local innerRight = self:getNodeKey(row,     col)     -- 右下の境界点
+
+    if blockType == BLOCK.SLASH then
+        return {
+            { outerLeft, innerRight }
+        }
+    elseif blockType == BLOCK.BACKSLASH then
+        return {
+            { innerLeft, outerRight }
+        }
+    elseif blockType == BLOCK.VALLEY then
+        return {
+            { outerLeft, outerRight }
+        }
+    elseif blockType == BLOCK.PEAK then
+        return {
+            { innerLeft, innerRight }
+        }
+    end
+
+    return {}
+end
+
+function Board:addAdjacency(adjacency, a, b)
+    adjacency[a] = adjacency[a] or {}
+    adjacency[b] = adjacency[b] or {}
+
+    if adjacency[a][b] == nil then
+        adjacency[a][b] = true
+        adjacency[b][a] = true
+    end
+end
+
+function Board:buildCellGraph()
+    local cellNodes = {}
+    local nodeToCells = {}
+
+    for row = 1, self.config.depth do
+        for col = 1, self.config.columns do
+            local blockType = self.cells:get(col, row)
+            if blockType ~= BLOCK.EMPTY then
+				-- セルのインデックスを取得
+                local index = self.cells:_get_index(col, row)
+                local edges = self:getCellEdges(row, col, blockType)
+                local nodeSet = {}
+
+                for _, edge in ipairs(edges) do
+                    local a, b = edge[1], edge[2]
+                    nodeSet[a] = true
+                    nodeSet[b] = true
+
+                    nodeToCells[a] = nodeToCells[a] or {}
+                    nodeToCells[b] = nodeToCells[b] or {}
+                    table.insert(nodeToCells[a], index)
+                    table.insert(nodeToCells[b], index)
+                end
+
+                cellNodes[index] = nodeSet
+            end
+        end
+    end
+
+    local adjacency = {}
+    for _, cellsAtNode in pairs(nodeToCells) do
+        for i = 1, #cellsAtNode do
+            for j = i + 1, #cellsAtNode do
+                self:addAdjacency(adjacency, cellsAtNode[i], cellsAtNode[j])
+            end
+        end
+    end
+
+    return cellNodes, adjacency
+end
+
+function Board:walkCycle(startIndex, adjacency, componentSet, visited)
+    local ordered = {}
+    local neighbors = adjacency[startIndex]
+    if neighbors == nil then
+        return ordered
+    end
+
+    local firstNeighbor
+    for neighborIndex, _ in pairs(neighbors) do
+        if componentSet[neighborIndex] then
+            firstNeighbor = neighborIndex
+            break
+        end
+    end
+
+    if firstNeighbor == nil then
+        return ordered
+    end
+
+    table.insert(ordered, startIndex)
+    visited[startIndex] = true
+
+    local previous = startIndex
+    local current = firstNeighbor
+
+    while current ~= nil and not visited[current] do
+        table.insert(ordered, current)
+        visited[current] = true
+
+        local nextIndex = nil
+        local nextNeighbors = adjacency[current] or {}
+        for neighborIndex, _ in pairs(nextNeighbors) do
+            if componentSet[neighborIndex] and neighborIndex ~= previous then
+                nextIndex = neighborIndex
+                break
+            end
+        end
+
+        previous = current
+        current = nextIndex
+
+        if current == startIndex then
+            break
+        end
+    end
+
+    return ordered
+end
+
+function Board:checkEraseList()
+    local _, adjacency = self:buildCellGraph()
+    local visited = {}
+    local eraseList = ErasePanelList()
+
+    for row = 1, self.config.depth do
+        for col = 1, self.config.columns do
+            local index = self.cells:_get_index(col, row)
+            local blockType = self.cells:get(col, row)
+            if blockType ~= BLOCK.EMPTY and not visited[index] then
+                local stack = { index }
+                local component = {}
+                local componentSet = {}
+
+                while #stack > 0 do
+                    local current = table.remove(stack)
+                    if not visited[current] then
+                        visited[current] = true
+                        componentSet[current] = true
+                        table.insert(component, current)
+
+                        local neighbors = adjacency[current] or {}
+                        for neighborIndex, _ in pairs(neighbors) do
+                            if not visited[neighborIndex] then
+                                table.insert(stack, neighborIndex)
+                            end
+                        end
+                    end
+                end
+
+                local isCycle = #component >= 3
+                if isCycle then
+                    for _, cellIndex in ipairs(component) do
+                        local degree = 0
+                        local neighbors = adjacency[cellIndex] or {}
+                        for neighborIndex, _ in pairs(neighbors) do
+                            if componentSet[neighborIndex] then
+                                degree = degree + 1
+                            end
+                        end
+                        if degree ~= 2 then
+                            isCycle = false
+                            break
+                        end
+                    end
+                end
+
+                if isCycle then
+                    local group = ErasePanelGroup()
+                    local ordered = self:walkCycle(component[1], adjacency, componentSet, {})
+                    if #ordered == 0 then
+                        ordered = component
+                    end
+
+                    for _, cellIndex in ipairs(ordered) do
+                        group:addIndex(cellIndex)
+                    end
+                    eraseList:addGroup(group)
+                end
+            end
+        end
+    end
+
+    return eraseList
+end
+
+function Board:checkeraselist()
+    return self:checkEraseList()
+end
+
+function Board:eraseByList(eraseList)
+    if eraseList == nil or eraseList:isEmpty() then
+        return
+    end
+
+    for _, group in ipairs(eraseList.groups) do
+        for _, index in ipairs(group.indices) do
+            local col, row = self:indexToCell(index)
+            self:setCell(col, row, BLOCK.EMPTY)
+        end
+    end
+end
+
+function Board:eraseeraselist(eraseList)
+    self:eraseByList(eraseList)
 end
 
 function Board:ellipsePoint(cx, cy, rx, ry, angle)
@@ -237,18 +512,6 @@ function Board:drawGunpeyBlock(row, col, blockType)
         gfx.drawLine(innerLeftX, innerLeftY, peakApexX, peakApexY)
         gfx.drawLine(innerRightX, innerRightY, peakApexX, peakApexY)
     end
-
-    -- 接続点の表示を有効化する場合はこのコメントを外す.
-    -- if blockType == BLOCK.VALLEY then
-    --     self:drawNode(outerLeftX, outerLeftY)
-    --     self:drawNode(outerRightX, outerRightY)
-    -- elseif blockType == BLOCK.PEAK then
-    --     self:drawNode(innerLeftX, innerLeftY)
-    --     self:drawNode(innerRightX, innerRightY)
-    -- else
-    --     self:drawNode(leftMidX, leftMidY)
-    --     self:drawNode(rightMidX, rightMidY)
-    -- end
 end
 
 function Board:drawBlocks()
