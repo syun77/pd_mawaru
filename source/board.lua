@@ -5,6 +5,13 @@ import "array2d"
 
 local gfx <const> = playdate.graphics
 
+-- 動作モード
+BOARD_MODE = {
+	SINGLE = 1, -- カーソルが単一.
+	VERTICAL_SWAP = 2, -- カーソルが縦2列で、上下を入れ替える.
+}
+ 
+-- ブロックの種類.
 local BLOCK = {
     EMPTY = 0,
     SLASH = 1,      -- /
@@ -48,6 +55,7 @@ end
 Board.BLOCK = BLOCK
 
 function Board:init(config)
+	-- ゲーム設定.
     self.config = {
         cx = 200,
         cy = 120,
@@ -70,8 +78,8 @@ function Board:init(config)
     end
 
     self.cells = Array2D(self.config.columns, self.config.depth, BLOCK.EMPTY)
-    self.cursorX = 1
-    self.cursorY = 1
+	self.mode = BOARD_MODE.VERTICAL_SWAP -- 現在は縦入れ替えモードのみ.
+	self:setCursor(1, 1) -- カーソル位置を設定.
     self:randomize()
 end
 
@@ -106,13 +114,21 @@ end
 function Board:draw()
     self:drawBoardGuide()
     self:drawBlocks()
-    self:drawCursor()
+    self:drawCursor(self.cursorX, self.cursorY)
+	if self.mode == BOARD_MODE.VERTICAL_SWAP then
+		-- 縦入れ替えモードの場合、カーソルの上のセルもハイライトする.
+		self:drawCursor(self.cursorX, self.cursorY - 1)
+	end
 end
 
 function Board:setCursor(x, y)
     -- 列は円周上なのでループ、行は範囲内にクランプ.
+	local minY = 1
+	if self.mode == BOARD_MODE.VERTICAL_SWAP then
+		minY = 2 -- 縦入れ替えモードの場合、カーソルは最下段以外にする（下段は入れ替え対象のみになるため）
+	end
     self.cursorX = ((x - 1) % self.config.columns) + 1
-    self.cursorY = math.max(1, math.min(y, self.config.depth))
+    self.cursorY = math.max(minY, math.min(y, self.config.depth))
 end
 
 function Board:getCursor()
@@ -568,9 +584,9 @@ function Board:drawBlocks()
     end
 end
 
-function Board:drawCursor()
+function Board:drawCursor(cursorX, cursorY)
     local outerLeftX, outerLeftY, outerRightX, outerRightY,
-          innerLeftX, innerLeftY, innerRightX, innerRightY = self:getCellCorners(self.cursorX, self.cursorY)
+          innerLeftX, innerLeftY, innerRightX, innerRightY = self:getCellCorners(cursorX, cursorY)
 
     gfx.setColor(gfx.kColorXOR)
     gfx.fillPolygon(
