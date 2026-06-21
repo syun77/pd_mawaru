@@ -86,6 +86,7 @@ function Board:init(config)
     self.cells = Array2D(self.config.columns, self.config.depth, BLOCK.EMPTY)
 	self.mode = BOARD_MODE.VERTICAL_SWAP -- 現在は縦入れ替えモードのみ.
     self.swapDrawAnimation = nil
+    	self.boardGuideEllipseCache = self:buildBoardGuideEllipseCache()
 	self:setCursor(1, 1) -- カーソル位置を設定.
     self:randomize()
 end
@@ -582,7 +583,33 @@ function Board:getCellCorners(col, row)
     return outerLeftX, outerLeftY, outerRightX, outerRightY, innerLeftX, innerLeftY, innerRightX, innerRightY
 end
 
-function Board:drawEllipsePolyline(rx, ry)
+function Board:buildBoardGuideEllipseCache()
+    local cacheWidth = math.ceil(self.config.width)
+    local cacheHeight = math.ceil(self.config.height)
+    local guideImage = gfx.image.new(cacheWidth, cacheHeight)
+
+    if guideImage == nil then
+        return nil
+    end
+
+    gfx.pushContext(guideImage)
+    gfx.clear(gfx.kColorClear)
+    gfx.setColor(gfx.kColorBlack)
+    gfx.setLineWidth(1)
+
+    local centerX = cacheWidth * 0.5
+    local centerY = cacheHeight * 0.5
+
+    for b = 0, self.config.depth do
+        local rx, ry = self:getRowBoundaryRadius(b)
+        self:drawEllipsePolylineAt(centerX, centerY, rx, ry)
+    end
+
+    gfx.popContext()
+    return guideImage
+end
+
+function Board:drawEllipsePolylineAt(cx, cy, rx, ry)
     local steps = 320
     local dash = 2 -- 描く区間
     local gap  = 2 -- 空ける区間
@@ -591,7 +618,7 @@ function Board:drawEllipsePolyline(rx, ry)
 
     for i = 0, steps do
         local a = i / steps * math.pi * 2
-        local x, y = self:ellipsePoint(self.config.cx, self.config.cy, rx, ry, a)
+        local x, y = self:ellipsePoint(cx, cy, rx, ry, a)
 
         if prevX then
             local period = dash + gap
@@ -604,12 +631,20 @@ function Board:drawEllipsePolyline(rx, ry)
     end
 end
 
+function Board:drawEllipsePolyline(rx, ry)
+    self:drawEllipsePolylineAt(self.config.cx, self.config.cy, rx, ry)
+end
+
 function Board:drawBoardGuide()
     gfx.setLineWidth(1)
 
+    if self.boardGuideEllipseCache ~= nil then
+        self.boardGuideEllipseCache:draw(self.config.cx - self.config.width * 0.5, self.config.cy - self.config.height * 0.5)
+    else
     for b = 0, self.config.depth do
         local rx, ry = self:getRowBoundaryRadius(b)
         self:drawEllipsePolyline(rx, ry)
+    end
     end
 
     for c = 1, self.config.columns do
