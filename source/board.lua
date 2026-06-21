@@ -66,6 +66,8 @@ function Board:init(config)
         columnAngleOffsetColumns = 0.5,
         valleyHeightRatio = 0.6, -- 谷型の中央の高さ調整用.
         peakHeightRatio = 0.2, -- 山型の中央の高さ調整用. 0に近いほど尖る.
+        swapDrawOffsetScale = 0.7,
+        swapDrawAnimationStep = 0.2,
         innerScale = 0.35,
         lineWidth = 2,
         nodeRadius = 2
@@ -79,6 +81,7 @@ function Board:init(config)
 
     self.cells = Array2D(self.config.columns, self.config.depth, BLOCK.EMPTY)
 	self.mode = BOARD_MODE.VERTICAL_SWAP -- 現在は縦入れ替えモードのみ.
+    self.swapDrawAnimation = nil
 	self:setCursor(1, 1) -- カーソル位置を設定.
     self:randomize()
 end
@@ -119,6 +122,63 @@ function Board:draw()
 		-- 縦入れ替えモードの場合、カーソルの上のセルもハイライトする.
 		self:drawCursor(self.cursorX, self.cursorY - 1)
 	end
+    self:updateSwapDrawAnimation()
+end
+
+function Board:normalizeColumn(col)
+    return ((col - 1) % self.config.columns) + 1
+end
+
+function Board:isValidRow(row)
+    return row >= 1 and row <= self.config.depth
+end
+
+function Board:getCellCenter(col, row)
+    local outerLeftX, outerLeftY, outerRightX, outerRightY,
+        innerLeftX, innerLeftY, innerRightX, innerRightY = self:getCellCorners(col, row)
+
+    local centerX = (outerLeftX + outerRightX + innerLeftX + innerRightX) * 0.25
+    local centerY = (outerLeftY + outerRightY + innerLeftY + innerRightY) * 0.25
+    return centerX, centerY
+end
+
+function Board:startSwapDrawAnimation(colA, rowA, colB, rowB)
+    self.swapDrawAnimation = {
+        progress = 1.0,
+        cells = {
+            { col = colA, row = rowA, fromCol = colB, fromRow = rowB },
+            { col = colB, row = rowB, fromCol = colA, fromRow = rowA }
+        }
+    }
+end
+
+function Board:updateSwapDrawAnimation()
+    if self.swapDrawAnimation == nil then
+        return
+    end
+
+    self.swapDrawAnimation.progress = self.swapDrawAnimation.progress - self.config.swapDrawAnimationStep
+    if self.swapDrawAnimation.progress <= 0 then
+        self.swapDrawAnimation = nil
+    end
+end
+
+function Board:getCellDrawOffset(col, row)
+    if self.swapDrawAnimation == nil then
+        return 0, 0
+    end
+
+    for _, animCell in ipairs(self.swapDrawAnimation.cells) do
+        if animCell.col == col and animCell.row == row then
+            local dstX, dstY = self:getCellCenter(col, row)
+            local srcX, srcY = self:getCellCenter(animCell.fromCol, animCell.fromRow)
+            local eased = self.swapDrawAnimation.progress * self.swapDrawAnimation.progress
+            local scale = self.config.swapDrawOffsetScale
+            return (srcX - dstX) * eased * scale, (srcY - dstY) * eased * scale
+        end
+    end
+
+    return 0, 0
 end
 
 function Board:setCursor(x, y)
@@ -158,8 +218,13 @@ end
 -- 指定した位置のパネルを交換する.
 function Board:swapCells(dx, dy)
 	local x1, y1 = self.cursorX, self.cursorY
-	local x2, y2 = x1 + dx, y1 + dy
-	self.cells:swap(x1, y1, x2, y2, true, false)
+    local x2, y2 = self:normalizeColumn(x1 + dx), y1 + dy
+    if not self:isValidRow(y2) then
+        return
+    end
+
+    self.cells:swap(x1, y1, x2, y2, false, false)
+    self:startSwapDrawAnimation(x1, y1, x2, y2)
 end
 
 -- 接続チェックをするためのノードキーを取得する.
@@ -533,13 +598,21 @@ function Board:lerp(a, b, t)
     return a + (b - a) * t
 end
 
-function Board:drawGunpeyBlock(col, row, blockType)
+function Board:drawGunpeyBlock(col, row, blockType, offsetX, offsetY)
     if blockType == BLOCK.EMPTY then
         return
     end
 
-        local outerLeftX, outerLeftY, outerRightX, outerRightY,
-            innerLeftX, innerLeftY, innerRightX, innerRightY = self:getCellCorners(col, row)
+	offsetX = offsetX or 0
+	offsetY = offsetY or 0
+
+    local outerLeftX, outerLeftY, outerRightX, outerRightY,
+          innerLeftX, innerLeftY, innerRightX, innerRightY = self:getCellCorners(col, row)
+
+	outerLeftX, outerLeftY = outerLeftX + offsetX, outerLeftY + offsetY
+	outerRightX, outerRightY = outerRightX + offsetX, outerRightY + offsetY
+	innerLeftX, innerLeftY = innerLeftX + offsetX, innerLeftY + offsetY
+	innerRightX, innerRightY = innerRightX + offsetX, innerRightY + offsetY
 
     local leftMidX = (outerLeftX + innerLeftX) * 0.5
     local leftMidY = (outerLeftY + innerLeftY) * 0.5
@@ -579,7 +652,8 @@ end
 function Board:drawBlocks()
     for r = 1, self.config.depth do
         for c = 1, self.config.columns do
-            self:drawGunpeyBlock(c, r, self.cells:get(c, r))
+			local offsetX, offsetY = self:getCellDrawOffset(c, r)
+            self:drawGunpeyBlock(c, r, self.cells:get(c, r), offsetX, offsetY)
         end
     end
 end
