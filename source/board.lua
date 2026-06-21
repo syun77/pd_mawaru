@@ -146,12 +146,12 @@ function Board:swapCells(dx, dy)
 	self.cells:swap(x1, y1, x2, y2, true, false)
 end
 
-function Board:getNodeKey(rowBoundary, columnBoundary)
+function Board:getNodeKey(columnBoundary, rowBoundary)
     local normalizedColumn = ((columnBoundary - 1) % self.config.columns) + 1
-    return string.format("%d:%d", rowBoundary, normalizedColumn)
+    return string.format("%d:%d", normalizedColumn, rowBoundary)
 end
 
-function Board:getCellEdges(row, col, blockType)
+function Board:getCellEdges(col, row, blockType)
 	--[[
 		[outerLeft]  ---- [outerRight]
 		     |              |
@@ -159,26 +159,26 @@ function Board:getCellEdges(row, col, blockType)
 		     |              |
 		[innerLeft]  ---- [innerRight]
 	--]]
-    local outerLeft  = self:getNodeKey(row - 1, col - 1) -- 左上の境界点
-    local outerRight = self:getNodeKey(row - 1, col)     -- 右上の境界点
-    local innerLeft  = self:getNodeKey(row,     col - 1) -- 左下の境界点
-    local innerRight = self:getNodeKey(row,     col)     -- 右下の境界点
-
+    -- row が大きいほど外周になるように、外側境界を row、内側境界を row-1 とする.
+    local outerLeft  = self:getNodeKey(col - 1, row)     -- 左上の境界点
+    local outerRight = self:getNodeKey(col,     row)     -- 右上の境界点
+    local innerLeft  = self:getNodeKey(col - 1, row - 1) -- 左下の境界点
+    local innerRight = self:getNodeKey(col,     row - 1) -- 右下の境界点
     if blockType == BLOCK.SLASH then
         return {
-            { outerLeft, innerRight }
+            { innerLeft, outerRight } -- / の場合は左下と右上がつながる
         }
     elseif blockType == BLOCK.BACKSLASH then
         return {
-            { innerLeft, outerRight }
+            { outerLeft, innerRight } -- \ の場合は左上と右下がつながる
         }
     elseif blockType == BLOCK.VALLEY then
         return {
-            { outerLeft, outerRight }
+            { outerLeft, outerRight } -- 谷型の場合は左上と右上がつながる
         }
     elseif blockType == BLOCK.PEAK then
         return {
-            { innerLeft, innerRight }
+            { innerLeft, innerRight } -- 山型の場合は左下と右下がつながる
         }
     end
 
@@ -205,7 +205,7 @@ function Board:buildCellGraph()
             if blockType ~= BLOCK.EMPTY then
 				-- セルのインデックスを取得
                 local index = self.cells:_get_index(col, row)
-                local edges = self:getCellEdges(row, col, blockType)
+                local edges = self:getCellEdges(col, row, blockType)
                 local nodeSet = {}
 
                 for _, edge in ipairs(edges) do
@@ -390,7 +390,7 @@ function Board:getColumnBoundaryAngle(boundary)
     return (boundary + offsetColumns) / self.config.columns * math.pi * 2 - math.pi / 2
 end
 
-function Board:getCellCorners(row, col)
+function Board:getCellCorners(col, row)
     local leftBoundary = col - 1
     local rightBoundary = col
     local outerBoundary = row - 1
@@ -471,13 +471,13 @@ function Board:lerp(a, b, t)
     return a + (b - a) * t
 end
 
-function Board:drawGunpeyBlock(row, col, blockType)
+function Board:drawGunpeyBlock(col, row, blockType)
     if blockType == BLOCK.EMPTY then
         return
     end
 
-    local outerLeftX, outerLeftY, outerRightX, outerRightY,
-          innerLeftX, innerLeftY, innerRightX, innerRightY = self:getCellCorners(row, col)
+        local outerLeftX, outerLeftY, outerRightX, outerRightY,
+            innerLeftX, innerLeftY, innerRightX, innerRightY = self:getCellCorners(col, row)
 
     local leftMidX = (outerLeftX + innerLeftX) * 0.5
     local leftMidY = (outerLeftY + innerLeftY) * 0.5
@@ -517,14 +517,14 @@ end
 function Board:drawBlocks()
     for r = 1, self.config.depth do
         for c = 1, self.config.columns do
-            self:drawGunpeyBlock(r, c, self.cells:get(c, r))
+            self:drawGunpeyBlock(c, r, self.cells:get(c, r))
         end
     end
 end
 
 function Board:drawCursor()
     local outerLeftX, outerLeftY, outerRightX, outerRightY,
-          innerLeftX, innerLeftY, innerRightX, innerRightY = self:getCellCorners(self.cursorY, self.cursorX)
+          innerLeftX, innerLeftY, innerRightX, innerRightY = self:getCellCorners(self.cursorX, self.cursorY)
 
     gfx.setColor(gfx.kColorXOR)
     gfx.fillPolygon(
