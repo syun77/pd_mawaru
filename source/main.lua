@@ -13,6 +13,44 @@ gameContext:setup()
 
 local board = Board()
 
+local CRANK_ROTATE_VALUE = 5 -- クランクを回すときの角度の変化量の閾値.
+
+function isJustPressedLeft()
+	if pd.isCrankDocked() then
+		-- 左ボタン.
+		if pd.buttonJustPressed(pd.kButtonLeft) then
+			return true
+		end
+	elseif pd.isCrankDocked() == false then
+		-- クランクを左に回した場合.
+		local crankChange = pd.getCrankChange()
+		if crankChange < -CRANK_ROTATE_VALUE then
+			return true
+		end
+	end	
+
+	return false
+end
+
+function isJustPressedRight()
+	if pd.isCrankDocked() then
+	-- 右ボタン.
+		if pd.buttonJustPressed(pd.kButtonRight) then
+			return true
+		end
+	elseif pd.isCrankDocked() == false then
+		-- クランクを右に回した場合.
+		if pd.isCrankDocked() == false then
+			local crankChange = pd.getCrankChange()
+			if crankChange > CRANK_ROTATE_VALUE then
+				return true
+			end
+		end	
+	end
+
+	return false
+end
+
 function playdate.update()
     gfx.clear(gfx.kColorWhite)
 
@@ -23,9 +61,9 @@ function playdate.update()
 		board:moveCursorUp()
 	elseif pd.buttonJustPressed(pd.kButtonDown) then
 		board:moveCursorDown()
-	elseif pd.buttonJustPressed(pd.kButtonLeft) then
+	elseif isJustPressedLeft() then
 		board:moveCursorLeft()
-	elseif pd.buttonJustPressed(pd.kButtonRight) then
+	elseif isJustPressedRight() then
 		board:moveCursorRight()
 	elseif pd.buttonJustPressed(pd.kButtonA) then
 		-- カーソル位置のパネルと上隣のパネルを交換する.
