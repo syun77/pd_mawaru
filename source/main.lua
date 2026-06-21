@@ -32,10 +32,13 @@ function playdate.update()
 		board:swapCells(0, -1)
 	elseif pd.buttonJustPressed(pd.kButtonB) then
 		local eraseList = board:checkEraseList()
-		print("消すリストの数: " .. #eraseList)
-		for i, index in ipairs(eraseList) do
-			local pos = board:convertIndexToPosition(index)
-			print(string.format("消す位置: (%d, %d)", pos.x, pos.y))
+		print("消すリストの数: " .. #eraseList.groups)
+		for groupIndex, group in ipairs(eraseList.groups) do
+			print(string.format("グループ %d のセル数: %d", groupIndex, #group.indices))
+			for _, index in ipairs(group.indices) do
+				local pos = board:convertIndexToPosition(index)
+				print(string.format("  消す位置: (%d, %d)", pos.x, pos.y))
+			end
 		end
 		board:eraseByList(eraseList)
 	end	

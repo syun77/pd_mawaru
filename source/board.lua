@@ -146,11 +146,13 @@ function Board:swapCells(dx, dy)
 	self.cells:swap(x1, y1, x2, y2, true, false)
 end
 
+-- 接続チェックをするためのノードキーを取得する.
 function Board:getNodeKey(columnBoundary, rowBoundary)
     local normalizedColumn = ((columnBoundary - 1) % self.config.columns) + 1
     return string.format("%d:%d", normalizedColumn, rowBoundary)
 end
 
+-- 各パネルの接続関係をノードとエッジの集合として表現する.
 function Board:getCellEdges(col, row, blockType)
 	--[[
 		[outerLeft]  ---- [outerRight]
@@ -159,11 +161,11 @@ function Board:getCellEdges(col, row, blockType)
 		     |              |
 		[innerLeft]  ---- [innerRight]
 	--]]
-    -- row が大きいほど外周になるように、外側境界を row、内側境界を row-1 とする.
-    local outerLeft  = self:getNodeKey(col - 1, row)     -- 左上の境界点
-    local outerRight = self:getNodeKey(col,     row)     -- 右上の境界点
-    local innerLeft  = self:getNodeKey(col - 1, row - 1) -- 左下の境界点
-    local innerRight = self:getNodeKey(col,     row - 1) -- 右下の境界点
+    -- row が大きいほど外周になるように、外側境界を row、内側境界を row+1 とする.
+    local outerLeft  = self:getNodeKey(col,     row)     -- 左上の境界点
+    local outerRight = self:getNodeKey(col + 1, row)     -- 右上の境界点
+    local innerLeft  = self:getNodeKey(col,     row + 1) -- 左下の境界点
+    local innerRight = self:getNodeKey(col + 1, row + 1) -- 右下の境界点
     if blockType == BLOCK.SLASH then
         return {
             { innerLeft, outerRight } -- / の場合は左下と右上がつながる
@@ -198,6 +200,7 @@ end
 function Board:buildCellGraph()
     local cellNodes = {}
     local nodeToCells = {}
+    local edgeByIndex = {}
 
     for row = 1, self.config.depth do
         for col = 1, self.config.columns do
@@ -208,10 +211,17 @@ function Board:buildCellGraph()
                 local edges = self:getCellEdges(col, row, blockType)
                 local nodeSet = {}
 
+				print(string.format("Cell (%d, %d) [Index: %d] BlockType: %d Edges: %d", col, row, index, blockType, #edges))
+				for i, edge in ipairs(edges) do
+					print(string.format("  Edge %d: %s -- %s", i, edge[1], edge[2]))
+				end
+
                 for _, edge in ipairs(edges) do
                     local a, b = edge[1], edge[2]
                     nodeSet[a] = true
                     nodeSet[b] = true
+
+                    edgeByIndex[index] = { a = a, b = b }
 
                     nodeToCells[a] = nodeToCells[a] or {}
                     nodeToCells[b] = nodeToCells[b] or {}
@@ -233,7 +243,76 @@ function Board:buildCellGraph()
         end
     end
 
-    return cellNodes, adjacency
+    return cellNodes, adjacency, nodeToCells, edgeByIndex
+end
+
+function Board:isEdgeInCycle(edgeIndex, edgeByIndex, nodeToCells)
+    local edge = edgeByIndex[edgeIndex]
+    if edge == nil then
+        return false
+    end
+
+    local startNode = edge.a
+    local goalNode = edge.b
+    local queue = { startNode }
+    local head = 1
+    local visitedNodes = {}
+    visitedNodes[startNode] = true
+
+    while head <= #queue do
+        local currentNode = queue[head]
+        head = head + 1
+
+        local connectedEdges = nodeToCells[currentNode] or {}
+        for _, nextEdgeIndex in ipairs(connectedEdges) do
+            if nextEdgeIndex ~= edgeIndex then
+                local nextEdge = edgeByIndex[nextEdgeIndex]
+                if nextEdge ~= nil then
+                    local nextNode = nil
+                    if nextEdge.a == currentNode then
+                        nextNode = nextEdge.b
+                    elseif nextEdge.b == currentNode then
+                        nextNode = nextEdge.a
+                    end
+
+                    if nextNode ~= nil then
+                        if nextNode == goalNode then
+                            return true
+                        end
+
+                        if not visitedNodes[nextNode] then
+                            visitedNodes[nextNode] = true
+                            table.insert(queue, nextNode)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+function Board:collectConnectedIndices(startIndex, adjacency, allowSet, visited)
+    local ordered = {}
+    local stack = { startIndex }
+
+    while #stack > 0 do
+        local current = table.remove(stack)
+        if not visited[current] and allowSet[current] then
+            visited[current] = true
+            table.insert(ordered, current)
+
+            local neighbors = adjacency[current] or {}
+            for neighborIndex, _ in pairs(neighbors) do
+                if allowSet[neighborIndex] and not visited[neighborIndex] then
+                    table.insert(stack, neighborIndex)
+                end
+            end
+        end
+    end
+
+    return ordered
 end
 
 function Board:walkCycle(startIndex, adjacency, componentSet, visited)
@@ -286,60 +365,27 @@ function Board:walkCycle(startIndex, adjacency, componentSet, visited)
 end
 
 function Board:checkEraseList()
-    local _, adjacency = self:buildCellGraph()
-    local visited = {}
+    local _, adjacency, nodeToCells, edgeByIndex = self:buildCellGraph()
     local eraseList = ErasePanelList()
+    local cycleCellSet = {}
+
+    for edgeIndex, _ in pairs(edgeByIndex) do
+        if self:isEdgeInCycle(edgeIndex, edgeByIndex, nodeToCells) then
+            cycleCellSet[edgeIndex] = true
+        end
+    end
+
+    local visited = {}
 
     for row = 1, self.config.depth do
         for col = 1, self.config.columns do
             local index = self.cells:_get_index(col, row)
             local blockType = self.cells:get(col, row)
-            if blockType ~= BLOCK.EMPTY and not visited[index] then
-                local stack = { index }
-                local component = {}
-                local componentSet = {}
-
-                while #stack > 0 do
-                    local current = table.remove(stack)
-                    if not visited[current] then
-                        visited[current] = true
-                        componentSet[current] = true
-                        table.insert(component, current)
-
-                        local neighbors = adjacency[current] or {}
-                        for neighborIndex, _ in pairs(neighbors) do
-                            if not visited[neighborIndex] then
-                                table.insert(stack, neighborIndex)
-                            end
-                        end
-                    end
-                end
-
-                local isCycle = #component >= 3
-                if isCycle then
-                    for _, cellIndex in ipairs(component) do
-                        local degree = 0
-                        local neighbors = adjacency[cellIndex] or {}
-                        for neighborIndex, _ in pairs(neighbors) do
-                            if componentSet[neighborIndex] then
-                                degree = degree + 1
-                            end
-                        end
-                        if degree ~= 2 then
-                            isCycle = false
-                            break
-                        end
-                    end
-                end
-
-                if isCycle then
+            if blockType ~= BLOCK.EMPTY and cycleCellSet[index] and not visited[index] then
+                local component = self:collectConnectedIndices(index, adjacency, cycleCellSet, visited)
+                if #component > 0 then
                     local group = ErasePanelGroup()
-                    local ordered = self:walkCycle(component[1], adjacency, componentSet, {})
-                    if #ordered == 0 then
-                        ordered = component
-                    end
-
-                    for _, cellIndex in ipairs(ordered) do
+                    for _, cellIndex in ipairs(component) do
                         group:addIndex(cellIndex)
                     end
                     eraseList:addGroup(group)
@@ -499,10 +545,10 @@ function Board:drawGunpeyBlock(col, row, blockType)
     gfx.setLineWidth(self.config.lineWidth)
 
     if blockType == BLOCK.SLASH then
-        gfx.drawLine(outerLeftX, outerLeftY, innerRightX, innerRightY)
+        gfx.drawLine(innerLeftX, innerLeftY, outerRightX, outerRightY)
 
     elseif blockType == BLOCK.BACKSLASH then
-        gfx.drawLine(innerLeftX, innerLeftY, outerRightX, outerRightY)
+        gfx.drawLine(outerLeftX, outerLeftY, innerRightX, innerRightY)
 
     elseif blockType == BLOCK.VALLEY then
         gfx.drawLine(outerLeftX, outerLeftY, valleyApexX, valleyApexY)
