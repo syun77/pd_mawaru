@@ -18,7 +18,22 @@ function playdate.update()
 
     gfx.setColor(gfx.kColorBlack)
 
+	-- カーソルの移動.
+	if pd.buttonJustPressed(pd.kButtonUp) then
+		board:moveCursorUp()
+	elseif pd.buttonJustPressed(pd.kButtonDown) then
+		board:moveCursorDown()
+	elseif pd.buttonJustPressed(pd.kButtonLeft) then
+		board:moveCursorLeft()
+	elseif pd.buttonJustPressed(pd.kButtonRight) then
+		board:moveCursorRight()
+	elseif pd.buttonJustPressed(pd.kButtonA) then
+	end	
+
     board:draw()
 
+	-- FPS.
     playdate.drawFPS(4, 4)
+	-- カーソル位置の描画。
+	playdate.graphics.drawText(string.format("Cursor: (%d, %d)", board.cursorX, board.cursorY), 4, 20)
 end

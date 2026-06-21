@@ -25,6 +25,7 @@ function Board:init(config)
         height = 200,
         depth = 6,
         columns = 16,
+        columnAngleOffsetColumns = 0.5,
         valleyHeightRatio = 0.6, -- 谷型の中央の高さ調整用.
         peakHeightRatio = 0.2, -- 山型の中央の高さ調整用. 0に近いほど尖る.
         innerScale = 0.35,
@@ -110,7 +111,8 @@ function Board:getRowBoundaryRadius(boundary)
 end
 
 function Board:getColumnBoundaryAngle(boundary)
-    return boundary / self.config.columns * math.pi * 2 - math.pi / 2
+    local offsetColumns = self.config.columnAngleOffsetColumns or 0
+    return (boundary + offsetColumns) / self.config.columns * math.pi * 2 - math.pi / 2
 end
 
 function Board:getCellCorners(row, col)
@@ -133,7 +135,10 @@ function Board:getCellCorners(row, col)
 end
 
 function Board:drawEllipsePolyline(rx, ry)
-    local steps = 96
+    local steps = 320
+    local dash = 2 -- 描く区間
+    local gap  = 2 -- 空ける区間
+
     local prevX, prevY
 
     for i = 0, steps do
@@ -141,7 +146,10 @@ function Board:drawEllipsePolyline(rx, ry)
         local x, y = self:ellipsePoint(self.config.cx, self.config.cy, rx, ry, a)
 
         if prevX then
-            gfx.drawLine(prevX, prevY, x, y)
+            local period = dash + gap
+            if (i % period) < dash then
+                gfx.drawLine(prevX, prevY, x, y)
+            end
         end
 
         prevX, prevY = x, y
@@ -157,7 +165,7 @@ function Board:drawBoardGuide()
     end
 
     for c = 1, self.config.columns do
-        local angle = (c - 1) / self.config.columns * math.pi * 2 - math.pi / 2
+        local angle = self:getColumnBoundaryAngle(c - 1)
 
         local outerRx = self.config.width / 2
         local outerRy = self.config.height / 2
