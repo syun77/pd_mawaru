@@ -496,14 +496,18 @@ function Board:slideUpNewRow()
     self:startSlideUpAnimation()
 end
 
--- 接続チェックをするためのノードキーを取得する.
-function Board:getNodeKey(columnBoundary, rowBoundary)
+-- 接続チェックをするためのノードIDを取得する.
+function Board:getNodeId(columnBoundary, rowBoundary)
     local normalizedColumn = ((columnBoundary - 1) % self.config.columns) + 1
-    return string.format("%d:%d", normalizedColumn, rowBoundary)
+    return rowBoundary * self.config.columns + normalizedColumn
+end
+
+function Board:getNodeKey(columnBoundary, rowBoundary)
+	return self:getNodeId(columnBoundary, rowBoundary)
 end
 
 -- 各パネルの接続関係をノードとエッジの集合として表現する.
-function Board:getCellEdges(col, row, blockType)
+function Board:getCellEdge(col, row, blockType)
 	--[[
 		[outerLeft]  ---- [outerRight]
 		     |              |
@@ -512,88 +516,94 @@ function Board:getCellEdges(col, row, blockType)
 		[innerLeft]  ---- [innerRight]
 	--]]
     -- row が大きいほど外周になるように、外側境界を row、内側境界を row+1 とする.
-    local outerLeft  = self:getNodeKey(col,     row)     -- 左上の境界点
-    local outerRight = self:getNodeKey(col + 1, row)     -- 右上の境界点
-    local innerLeft  = self:getNodeKey(col,     row + 1) -- 左下の境界点
-    local innerRight = self:getNodeKey(col + 1, row + 1) -- 右下の境界点
+    local outerLeft  = self:getNodeId(col,     row)     -- 左上の境界点
+    local outerRight = self:getNodeId(col + 1, row)     -- 右上の境界点
+    local innerLeft  = self:getNodeId(col,     row + 1) -- 左下の境界点
+    local innerRight = self:getNodeId(col + 1, row + 1) -- 右下の境界点
     if blockType == BLOCK.SLASH then
-        return {
-            { innerLeft, outerRight } -- / の場合は左下と右上がつながる
-        }
+        return innerLeft, outerRight -- / の場合は左下と右上がつながる
     elseif blockType == BLOCK.BACKSLASH then
-        return {
-            { outerLeft, innerRight } -- \ の場合は左上と右下がつながる
-        }
+        return outerLeft, innerRight -- \ の場合は左上と右下がつながる
     elseif blockType == BLOCK.VALLEY then
-        return {
-            { outerLeft, outerRight } -- 谷型の場合は左上と右上がつながる
-        }
+        return outerLeft, outerRight -- 谷型の場合は左上と右上がつながる
     elseif blockType == BLOCK.PEAK then
-        return {
-            { innerLeft, innerRight } -- 山型の場合は左下と右下がつながる
-        }
+        return innerLeft, innerRight -- 山型の場合は左下と右下がつながる
     end
 
-    return {}
+    return nil, nil
 end
 
-function Board:addAdjacency(adjacency, a, b)
-    adjacency[a] = adjacency[a] or {}
-    adjacency[b] = adjacency[b] or {}
+function Board:addAdjacency(adjacency, adjacencyLookup, a, b)
+    local aLookup = adjacencyLookup[a]
+    if aLookup == nil then
+        aLookup = {}
+        adjacencyLookup[a] = aLookup
+        adjacency[a] = {}
+    end
 
-    if adjacency[a][b] == nil then
-        adjacency[a][b] = true
-        adjacency[b][a] = true
+    local bLookup = adjacencyLookup[b]
+    if bLookup == nil then
+        bLookup = {}
+        adjacencyLookup[b] = bLookup
+        adjacency[b] = {}
+    end
+
+    if not aLookup[b] then
+        aLookup[b] = true
+        bLookup[a] = true
+        local aNeighbors = adjacency[a]
+        local bNeighbors = adjacency[b]
+        aNeighbors[#aNeighbors + 1] = b
+        bNeighbors[#bNeighbors + 1] = a
     end
 end
 
 function Board:buildCellGraph()
-    local cellNodes = {}
     local nodeToCells = {}
     local edgeByIndex = {}
+    local adjacency = {}
+    local adjacencyLookup = {}
+    local config = self.config
+    local depth = config.depth
+    local columns = config.columns
+    local cells = self.cells
 
-    for row = 1, self.config.depth do
-        for col = 1, self.config.columns do
-            local blockType = self.cells:get(col, row)
+    for row = 1, depth do
+        for col = 1, columns do
+            local blockType = cells:get(col, row)
             if blockType ~= BLOCK.EMPTY then
-				-- セルのインデックスを取得
-                local index = self.cells:_get_index(col, row)
-                local edges = self:getCellEdges(col, row, blockType)
-                local nodeSet = {}
-
-				-- print(string.format("Cell (%d, %d) [Index: %d] BlockType: %d Edges: %d", col, row, index, blockType, #edges))
-				-- for i, edge in ipairs(edges) do
-				-- 	print(string.format("  Edge %d: %s -- %s", i, edge[1], edge[2]))
-				-- end
-
-                for _, edge in ipairs(edges) do
-                    local a, b = edge[1], edge[2]
-                    nodeSet[a] = true
-                    nodeSet[b] = true
-
+                local index = cells:_get_index(col, row)
+                local a, b = self:getCellEdge(col, row, blockType)
+                if a ~= nil and b ~= nil then
                     edgeByIndex[index] = { a = a, b = b }
 
-                    nodeToCells[a] = nodeToCells[a] or {}
-                    nodeToCells[b] = nodeToCells[b] or {}
-                    table.insert(nodeToCells[a], index)
-                    table.insert(nodeToCells[b], index)
-                end
+                    local aCells = nodeToCells[a]
+                    if aCells == nil then
+                        aCells = {}
+                        nodeToCells[a] = aCells
+                    end
+                    aCells[#aCells + 1] = index
 
-                cellNodes[index] = nodeSet
+                    local bCells = nodeToCells[b]
+                    if bCells == nil then
+                        bCells = {}
+                        nodeToCells[b] = bCells
+                    end
+                    bCells[#bCells + 1] = index
+                end
             end
         end
     end
 
-    local adjacency = {}
     for _, cellsAtNode in pairs(nodeToCells) do
         for i = 1, #cellsAtNode do
             for j = i + 1, #cellsAtNode do
-                self:addAdjacency(adjacency, cellsAtNode[i], cellsAtNode[j])
+                self:addAdjacency(adjacency, adjacencyLookup, cellsAtNode[i], cellsAtNode[j])
             end
         end
     end
 
-    return cellNodes, adjacency, nodeToCells, edgeByIndex
+    return adjacency, nodeToCells, edgeByIndex
 end
 
 function Board:isEdgeInCycle(edgeIndex, edgeByIndex, nodeToCells)
@@ -613,8 +623,10 @@ function Board:isEdgeInCycle(edgeIndex, edgeByIndex, nodeToCells)
         local currentNode = queue[head]
         head = head + 1
 
-        local connectedEdges = nodeToCells[currentNode] or {}
-        for _, nextEdgeIndex in ipairs(connectedEdges) do
+        local connectedEdges = nodeToCells[currentNode]
+        if connectedEdges ~= nil then
+            for i = 1, #connectedEdges do
+                local nextEdgeIndex = connectedEdges[i]
             if nextEdgeIndex ~= edgeIndex then
                 local nextEdge = edgeByIndex[nextEdgeIndex]
                 if nextEdge ~= nil then
@@ -637,6 +649,7 @@ function Board:isEdgeInCycle(edgeIndex, edgeByIndex, nodeToCells)
                     end
                 end
             end
+            end
         end
     end
 
@@ -648,15 +661,17 @@ function Board:collectConnectedIndices(startIndex, adjacency, allowSet, visited)
     local stack = { startIndex }
 
     while #stack > 0 do
-        local current = table.remove(stack)
+        local current = stack[#stack]
+        stack[#stack] = nil
         if not visited[current] and allowSet[current] then
             visited[current] = true
-            table.insert(ordered, current)
+            ordered[#ordered + 1] = current
 
             local neighbors = adjacency[current] or {}
-            for neighborIndex, _ in pairs(neighbors) do
+            for i = 1, #neighbors do
+                local neighborIndex = neighbors[i]
                 if allowSet[neighborIndex] and not visited[neighborIndex] then
-                    table.insert(stack, neighborIndex)
+                    stack[#stack + 1] = neighborIndex
                 end
             end
         end
@@ -673,7 +688,8 @@ function Board:walkCycle(startIndex, adjacency, componentSet, visited)
     end
 
     local firstNeighbor
-    for neighborIndex, _ in pairs(neighbors) do
+    for i = 1, #neighbors do
+        local neighborIndex = neighbors[i]
         if componentSet[neighborIndex] then
             firstNeighbor = neighborIndex
             break
@@ -691,12 +707,13 @@ function Board:walkCycle(startIndex, adjacency, componentSet, visited)
     local current = firstNeighbor
 
     while current ~= nil and not visited[current] do
-        table.insert(ordered, current)
+        ordered[#ordered + 1] = current
         visited[current] = true
 
         local nextIndex = nil
         local nextNeighbors = adjacency[current] or {}
-        for neighborIndex, _ in pairs(nextNeighbors) do
+        for i = 1, #nextNeighbors do
+            local neighborIndex = nextNeighbors[i]
             if componentSet[neighborIndex] and neighborIndex ~= previous then
                 nextIndex = neighborIndex
                 break
@@ -715,28 +732,31 @@ function Board:walkCycle(startIndex, adjacency, componentSet, visited)
 end
 
 function Board:checkEraseList()
-    local _, adjacency, nodeToCells, edgeByIndex = self:buildCellGraph()
+    local adjacency, nodeToCells, edgeByIndex = self:buildCellGraph()
     local eraseList = ErasePanelList()
     local cycleCellSet = {}
+    local columns = self.config.columns
+    local depth = self.config.depth
+    local maxIndex = columns * depth
 
-    for edgeIndex, _ in pairs(edgeByIndex) do
-        if self:isEdgeInCycle(edgeIndex, edgeByIndex, nodeToCells) then
+    for edgeIndex = 1, maxIndex do
+        if edgeByIndex[edgeIndex] ~= nil and self:isEdgeInCycle(edgeIndex, edgeByIndex, nodeToCells) then
             cycleCellSet[edgeIndex] = true
         end
     end
 
     local visited = {}
 
-    for row = 1, self.config.depth do
-        for col = 1, self.config.columns do
+    for row = 1, depth do
+        for col = 1, columns do
             local index = self.cells:_get_index(col, row)
             local blockType = self.cells:get(col, row)
             if blockType ~= BLOCK.EMPTY and cycleCellSet[index] and not visited[index] then
                 local component = self:collectConnectedIndices(index, adjacency, cycleCellSet, visited)
                 if #component > 0 then
                     local group = ErasePanelGroup()
-                    for _, cellIndex in ipairs(component) do
-                        group:addIndex(cellIndex)
+                    for i = 1, #component do
+                        group:addIndex(component[i])
                     end
                     eraseList:addGroup(group)
                 end
