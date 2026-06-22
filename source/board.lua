@@ -72,8 +72,11 @@ function Board:init(config)
         swapDrawAnimationStep = 0.2,
         slideUpAnimationStep = 0.2,
         innerScale = 0.35,
-        lineWidth = 2,
-        nodeRadius = 2
+        lineWidth = 3, -- ラインの太さ.
+        nodeRadius = 2,
+        guideDashLength = 6,
+        guideGapLength = 6,
+        boardGuideRadialCacheStep = 0.125
     }
 
     if config ~= nil then
@@ -93,6 +96,8 @@ function Board:init(config)
 	self.frameCellCenterCache = {}
 	self:buildRowRadiusCache()
     self.boardGuideEllipseCache = self:buildBoardGuideEllipseCache()
+    self.boardGuideRadialCache = nil
+    self.boardGuideRadialCacheOffset = nil
 	self:setCursor(1, 1) -- カーソル位置を設定.
     self:randomize()
 end
@@ -896,23 +901,102 @@ function Board:drawEllipsePolyline(rx, ry)
     self:drawEllipsePolylineAt(self.config.cx, self.config.cy, rx, ry)
 end
 
+function Board:drawDashedLine(x1, y1, x2, y2, dash, gap)
+    dash = dash or self.config.guideDashLength
+    gap = gap or self.config.guideGapLength
+
+    local dx = x2 - x1
+    local dy = y2 - y1
+    local length = math.sqrt(dx * dx + dy * dy)
+    if length <= 0 then
+        return
+    end
+
+    local ux = dx / length
+    local uy = dy / length
+    local step = dash + gap
+    local distance = 0
+
+    while distance < length do
+        local segStart = distance
+        local segEnd = math.min(distance + dash, length)
+        local sx = x1 + ux * segStart
+        local sy = y1 + uy * segStart
+        local ex = x1 + ux * segEnd
+        local ey = y1 + uy * segEnd
+        gfx.drawLine(sx, sy, ex, ey)
+        distance = distance + step
+    end
+end
+
+function Board:buildBoardGuideRadialCache()
+    local cacheWidth = math.ceil(self.config.width)
+    local cacheHeight = math.ceil(self.config.height)
+    local guideImage = gfx.image.new(cacheWidth, cacheHeight)
+
+    if guideImage == nil then
+        return nil
+    end
+
+    local originX = self.config.cx - cacheWidth * 0.5
+    local originY = self.config.cy - cacheHeight * 0.5
+
+    gfx.pushContext(guideImage)
+    gfx.clear(gfx.kColorClear)
+    gfx.setColor(gfx.kColorBlack)
+    gfx.setLineWidth(1)
+
+    local framePointCache = self.framePointCache
+    for c = 0, self.config.columns - 1 do
+        local outer = framePointCache[c][0]
+        local inner = framePointCache[c][self.config.depth]
+        self:drawDashedLine(
+            outer.x - originX,
+            outer.y - originY,
+            inner.x - originX,
+            inner.y - originY
+        )
+    end
+
+    gfx.popContext()
+    return guideImage
+end
+
+function Board:updateBoardGuideRadialCache()
+    local offset = self.currentColumnAngleOffset or self.config.columnAngleOffsetColumns or 0
+    local step = self.config.boardGuideRadialCacheStep
+    local quantizedOffset = math.floor(offset / step + 0.5) * step
+
+    if self.boardGuideRadialCache ~= nil and self.boardGuideRadialCacheOffset == quantizedOffset then
+        return
+    end
+
+    self.boardGuideRadialCache = self:buildBoardGuideRadialCache()
+    self.boardGuideRadialCacheOffset = quantizedOffset
+end
+
 function Board:drawBoardGuide()
     gfx.setLineWidth(1)
 
     if self.boardGuideEllipseCache ~= nil then
         self.boardGuideEllipseCache:draw(self.config.cx - self.config.width * 0.5, self.config.cy - self.config.height * 0.5)
     else
-    for b = 0, self.config.depth do
-        local rx, ry = self:getRowBoundaryRadius(b)
-        self:drawEllipsePolyline(rx, ry)
-    end
+		for b = 0, self.config.depth do
+			local rx, ry = self:getRowBoundaryRadius(b)
+			self:drawEllipsePolyline(rx, ry)
+		end
     end
 
-    local framePointCache = self.framePointCache
-    for c = 0, self.config.columns - 1 do
-        local outer = framePointCache[c][0]
-        local inner = framePointCache[c][self.config.depth]
-        gfx.drawLine(outer.x, outer.y, inner.x, inner.y)
+    self:updateBoardGuideRadialCache()
+    if self.boardGuideRadialCache ~= nil then
+        self.boardGuideRadialCache:draw(self.config.cx - self.config.width * 0.5, self.config.cy - self.config.height * 0.5)
+    else
+        local framePointCache = self.framePointCache
+        for c = 0, self.config.columns - 1 do
+            local outer = framePointCache[c][0]
+            local inner = framePointCache[c][self.config.depth]
+            self:drawDashedLine(outer.x, outer.y, inner.x, inner.y)
+        end
     end
 end
 

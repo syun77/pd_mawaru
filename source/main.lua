@@ -63,18 +63,24 @@ local GAMESTATE = {
 local gameState = GAMESTATE.CHECK_ERASE
 
 function _updatePlaying()
+	local sound = gameContext.sound
 	-- カーソルの移動.
 	if pd.buttonJustPressed(pd.kButtonUp) then
 		board:moveCursorUp()
+		sound:play("pi")
 	elseif pd.buttonJustPressed(pd.kButtonDown) then
 		board:moveCursorDown()
+		sound:play("pi")
 	elseif isJustPressedLeft() then
 		board:moveCursorLeft()
+		sound:play("pi")
 	elseif isJustPressedRight() then
 		board:moveCursorRight()
+		sound:play("pi")
 	elseif pd.buttonJustPressed(pd.kButtonA) then
 		-- カーソル位置のパネルと上隣のパネルを交換する.
 		board:swapCells(0, -1)
+		sound:play("swap")
 		-- 消去チェックへ.
 		gameState = GAMESTATE.CHECK_ERASE
 	elseif pd.buttonJustPressed(pd.kButtonB) then
@@ -98,6 +104,7 @@ function _updateCheckErase()
 	end
 	if board:startEraseBlinkAnimation(eraseList) then
 		-- 消すことができた.
+		gameContext.sound:play("erase")
 		gameState = GAMESTATE.ERASING
 	else
 		-- 消せないので、プレイヤー操作中に戻す.
