@@ -62,8 +62,8 @@ function Board:init(config)
         cy = 120,
         width = 340,
         height = 200,
-        depth = 6,
-        columns = 16,
+        columns = 12, -- 列数.
+        depth = 6, -- 行数.
         columnAngleOffsetColumns = 0.5,
         valleyHeightRatio = 0.6, -- 谷型の中央の高さ調整用.
         peakHeightRatio = 0.2, -- 山型の中央の高さ調整用. 0に近いほど尖る.

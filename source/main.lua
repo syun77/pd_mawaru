@@ -4,9 +4,16 @@ import "CoreLibs/object" -- classを使うために必要.
 import "CoreLibs/sprites" -- spriteを使うために必要.
 import "game_context"
 import "board"
+import "beatmachine"
 
 local pd <const> = playdate
 local gfx <const> = pd.graphics
+
+BeatMachine.Create()
+BeatMachine.LoadBeat("beats/demo.bmf")
+BeatMachine.PlayTheBeat(0)
+
+pd.display.setRefreshRate(0) -- 50Hzに設定.
 
 local gameContext = GameContext.getInstance()
 gameContext:setup()
@@ -88,6 +95,8 @@ function _updatePlaying()
 		board:slideUpNewRow()
 		-- せり上げアニメーション中に移行.
 		gameState = GAMESTATE.SLIDEUP
+
+		BeatMachine.SetBPM(150) -- BPMを設定.
 	end	
 end
 
