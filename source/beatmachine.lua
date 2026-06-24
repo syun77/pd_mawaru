@@ -359,6 +359,16 @@ function BeatMachine.SetBPM(bpm)
 	BeatMachine.sequence:setTempo(stepsPerSecond)
 end
 
+-- 音量を設定する.
+function BeatMachine.SetVolume(volume)
+	for i = 1, BM_CONST.BM_MAX_TRACK do
+		local track = BeatMachine.tracks[i]
+		if track.synth ~= nil then
+			track.synth:setVolume(volume)
+		end
+	end
+end
+
 function BeatMachine.Update()
 
     gfx.clear(gfx.kColorWhite)

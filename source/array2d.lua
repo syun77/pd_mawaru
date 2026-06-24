@@ -125,3 +125,29 @@ function Array2D:slideY(dy)
 	end, bReverse)
 	return ret
 end
+
+-- 特定の列のみをY方向にスライドする.
+-- @param column スライドする列のインデックス (1始まり)
+-- @param dy スライド量 (正の値で下方向、負の値で上方向)
+-- @return 有効なパネルの数を返す.
+function Array2D:slideColumnY(column, dy)
+	if dy == 0 then return end -- スライド量が0の場合は何もしない
+	local ret = 0
+	local bReverse = dy > 0 -- 正の方向にスライドする場合は逆順で処理する
+	self:foreach(function(x, y, v)
+		if x == column and v ~= 0 then
+			-- 有効な値がある場合はスライドする.
+			local newY = y + dy
+			if newY >= 1 and newY <= self.height then
+				-- 新しい位置が有効範囲内の場合は値を移動する.
+				self:set(x, newY, v)
+				self:set(x, y, 0) -- 元の位置をクリアする
+				ret += 1
+			else
+				-- 新しい位置が範囲外の場合は値を消す.
+				self:set(x, y, 0)
+			end
+		end
+	end, bReverse)
+	return ret
+end

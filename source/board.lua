@@ -99,7 +99,6 @@ function Board:init(config)
     self.boardGuideRadialCache = nil
     self.boardGuideRadialCacheOffset = nil
 	self:setCursor(1, 1) -- カーソル位置を設定.
-    self:randomize()
 end
 
 function Board:randomize()

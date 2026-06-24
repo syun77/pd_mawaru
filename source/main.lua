@@ -12,8 +12,9 @@ local gfx <const> = pd.graphics
 BeatMachine.Create()
 BeatMachine.LoadBeat("beats/demo.bmf")
 BeatMachine.PlayTheBeat(0)
+BeatMachine.SetVolume(0.05) -- 音量を設定.
 
-pd.display.setRefreshRate(0) -- 50Hzに設定.
+pd.display.setRefreshRate(50) -- 50Hzに設定.
 
 local gameContext = GameContext.getInstance()
 gameContext:setup()
@@ -63,13 +64,25 @@ local GAMESTATE = {
 	PLAYING = 0, -- プレイヤー操作中.
 	CHECK_ERASE = 1, -- 消去判定中.
 	ERASING = 2, -- 消去アニメーション中.
-	SLIDEUP = 3, -- せり上げアニメーション中.
+	SLIDEUP_CHECK = 3, -- せり上げチェック.
+	SLIDEUP = 4, -- せり上げアニメーション中.
 }
 
 -- ゲームの状態を管理する変数.
-local gameState = GAMESTATE.CHECK_ERASE
+local gameState = GAMESTATE.SLIDEUP_CHECK -- 初期状態はせり上げチェックに設定.
+local cntSlideY = 3 -- せり上がり回数.
+-- スライドアップの制限時間.
+local TIMER_SLIDEUP <const> = 30 * 30 -- せり上げの制限時間（いったん30FPSとして30秒）.
+local timeLimitSlideUp = TIMER_SLIDEUP -- せり上げのフレームカウンタ.
 
 function _updatePlaying()
+	timeLimitSlideUp -= 1
+	if timeLimitSlideUp <= 0 then
+		-- せり上げの制限時間が終了した場合は、せり上げチェックへ.
+		cntSlideY = 1 -- 1回せり上がる.
+		gameState = GAMESTATE.SLIDEUP_CHECK
+	end
+
 	local sound = gameContext.sound
 	-- カーソルの移動.
 	if pd.buttonJustPressed(pd.kButtonUp) then
@@ -96,7 +109,7 @@ function _updatePlaying()
 		-- せり上げアニメーション中に移行.
 		gameState = GAMESTATE.SLIDEUP
 
-		BeatMachine.SetBPM(150) -- BPMを設定.
+		--BeatMachine.SetBPM(150) -- BPMを設定.
 	end	
 end
 
@@ -116,18 +129,16 @@ function _updateCheckErase()
 		gameContext.sound:play("erase")
 		gameState = GAMESTATE.ERASING
 	else
-		-- 消せないので、プレイヤー操作中に戻す.
-		gameState = GAMESTATE.PLAYING
+		-- 消すことができなかったが、せり上げチェックへ.
+		gameState = GAMESTATE.SLIDEUP_CHECK
 	end
 end
 
 function _updateErasing()
 	-- 消去アニメーションの更新.
 	if board:isEndEraseAnimation() then
-		-- 点滅アニメーションが終了したら、ブロックを消去する.
-		-- board:eraseBlocks()
-		-- ゲーム状態をプレイヤー操作中に戻す.
-		gameState = GAMESTATE.PLAYING
+		-- 点滅アニメーションが終了したら、もう一度消去判定を行う.
+		gameState = GAMESTATE.CHECK_ERASE
 	end
 end
 
@@ -153,6 +164,21 @@ function playdate.update()
 	elseif gameState == GAMESTATE.ERASING then
 		-- 消去アニメーション中の処理.
 		_updateErasing()
+	elseif gameState == GAMESTATE.SLIDEUP_CHECK then
+		-- せり上げチェック中の処理.
+		-- せり上げ回数が残っている場合は、せり上げアニメーションへ.
+		if cntSlideY > 0 then
+			cntSlideY -= 1
+			board:slideUpNewRow()
+			gameState = GAMESTATE.SLIDEUP
+		else
+			-- せり上げ回数が残っていない場合は、プレイヤー操作中に戻す.
+			if timeLimitSlideUp <= 0 then
+				-- 時間切れの場合のみ、せり上げのフレームカウンタをリセット.
+				timeLimitSlideUp = TIMER_SLIDEUP
+			end
+			gameState = GAMESTATE.PLAYING
+		end
 	elseif gameState == GAMESTATE.SLIDEUP then
 		-- せり上げアニメーション中の処理.
 		_updateSlideUp()
@@ -168,4 +194,7 @@ function playdate.update()
 	playdate.graphics.drawText(string.format("Cursor: (%d, %d)", board.cursorX, board.cursorY), 4, 20)
 	-- 状態の描画.
 	playdate.graphics.drawText(string.format("GameState: %d", gameState), 4, 240-20)
+	-- せり上がりの残り時間を中央に描画する.
+	local font = gfx.getFont()
+	font:drawTextAligned(string.format("%d", timeLimitSlideUp), 200, 110, kTextAlignment.center)
 end
