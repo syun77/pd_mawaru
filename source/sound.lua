@@ -9,6 +9,7 @@ local soundTable = {
 	"erase",
 	"pi",
 	"swap",
+	"slideup"
 }
 
 class('Sound').extends()

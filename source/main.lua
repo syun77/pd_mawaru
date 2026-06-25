@@ -135,9 +135,9 @@ function _updatePlaying()
 		-- 消去チェックへ.
 		gameState = GAMESTATE.CHECK_ERASE
 	elseif pd.buttonJustPressed(pd.kButtonB) then
-		-- 自分でせり上げる.
-		timeLimitSlideUp = timeLimitSlideUpMax -- せり上げのフレームカウンタをリセット.
-		board:slideUpNewRow()
+		-- 自分で1列だけせり上げる.
+		board:slideUpColumn(board.cursorX)
+		gameContext.sound:play("slideup")
 		-- せり上げアニメーション中に移行.
 		gameState = GAMESTATE.SLIDEUP
 
@@ -180,6 +180,7 @@ function _updateCheckSlideUp()
 	if cntSlideY > 0 then
 		cntSlideY -= 1
 		board:slideUpNewRow()
+		gameContext.sound:play("slideup")
 		gameState = GAMESTATE.SLIDEUP
 	else
 		-- せり上げ回数が残っていない場合は、プレイヤー操作中に戻す.

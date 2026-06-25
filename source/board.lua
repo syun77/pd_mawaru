@@ -92,6 +92,7 @@ function Board:init(config)
     self.swapDrawAnimation = nil
     self.eraseBlinkAnimation = nil
     self.slideUpAnimation = nil
+	self.slideUpColumnNo = -1 -- せり上げ対象の列番号. -1の場合は全体をせり上げる.
 	self.framePointCache = {}
 	self.frameCellCenterCache = {}
 	self:buildRowRadiusCache()
@@ -308,6 +309,7 @@ function Board:startSlideUpAnimation()
     for col = 1, self.config.columns do
         incomingRow[col] = math.random(1, 4)
     end
+	self.slideUpColumnNo = -1 -- 全体をせり上げる.
 
     self.slideUpAnimation = {
         progress = 0,
@@ -329,10 +331,18 @@ function Board:updateSlideUpAnimation()
         return
     end
 
-    self.cells:slideY(-1)
-    for col = 1, self.config.columns do
-        self.cells:set(col, self.config.depth, animation.incomingRow[col])
-    end
+	if self.slideUpColumnNo > 0 then
+		-- 1列だけせり上げる.
+		self.cells:slideColumnY(self.slideUpColumnNo, -1)
+		local col = self.slideUpColumnNo
+		self.cells:set(col, self.config.depth, animation.incomingRow[col])
+	else
+		-- 全体をせり上げる.
+	    self.cells:slideY(-1)
+		for col = 1, self.config.columns do
+			self.cells:set(col, self.config.depth, animation.incomingRow[col])
+		end
+	end
 
     self.slideUpAnimation = nil
 end
@@ -346,6 +356,10 @@ function Board:getSlideUpDrawOffset(col, row)
     if self.slideUpAnimation == nil then
         return 0, 0
     end
+	if self.slideUpColumnNo > 0 and self.slideUpColumnNo ~= col then
+		-- 1列だけせり上げる場合、対象の列以外はアニメーションしない.
+		return 0, 0
+	end
 
     local progress = self.slideUpAnimation.progress
     local srcX, srcY = self:getCellCenter(col, row)
@@ -498,6 +512,17 @@ end
 -- 全体をせり上げて新しいパネルを出現させる.
 function Board:slideUpNewRow()
     self:startSlideUpAnimation()
+end
+-- 1列だけせり上げて新しいパネルを出現させる.
+function Board:slideUpColumn(col)
+	local incomingRow = {}
+	incomingRow[col] = math.random(1, 4)
+	self.slideUpColumnNo = col
+
+	self.slideUpAnimation = {
+		progress = 0,
+		incomingRow = incomingRow
+	}
 end
 
 -- 接続チェックをするためのノードIDを取得する.
@@ -1080,12 +1105,18 @@ function Board:drawBlocks()
     end
 
     if self.slideUpAnimation ~= nil then
-        for c = 1, self.config.columns do
-            local blockType = self.slideUpAnimation.incomingRow[c]
-            local incomingOffsetX, incomingOffsetY = self:getIncomingSlideUpOffset(c)
-            self:drawGunpeyBlock(c, self.config.depth, blockType, incomingOffsetX, incomingOffsetY)
-        end
+		-- せり上げアニメーションの描画.
+		self:drawSlideUpAnimation()
     end
+end
+
+-- せり上げアニメーションの描画.
+function Board:drawSlideUpAnimation()
+	for c = 1, self.config.columns do
+		local blockType = self.slideUpAnimation.incomingRow[c]
+		local incomingOffsetX, incomingOffsetY = self:getIncomingSlideUpOffset(c)
+		self:drawGunpeyBlock(c, self.config.depth, blockType, incomingOffsetX, incomingOffsetY)
+	end
 end
 
 -- カーソルの描画.
