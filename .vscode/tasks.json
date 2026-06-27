@@ -35,9 +35,22 @@
             }
         },
         {
+            // Opens the Playdate Simulator and brings it to front using a small helper script
+            "label": "Playdate: Run (focus)",
+            "type": "shell",
+            "command": "bash",
+            "args": ["-lc", "${workspaceFolder}/.vscode/scripts/run_playdate_focus.sh"],
+            "problemMatcher": ["$pdc-external"],
+            "presentation": {
+                "revealProblems": "onProblem",
+                "panel": "shared",
+                "showReuseMessage": false
+            }
+        },
+        {
             // Build and then launch the Playdate Simulator with our newly build .pdx
             "label": "Playdate: Build and Run",
-            "dependsOn": ["Playdate: Build", "Playdate: Run"],
+            "dependsOn": ["Playdate: Build", "Playdate: Run (focus)"],
             "dependsOrder": "sequence",
             // Set as our default built task under Terminal->Run Build Task, or with ctrl/cmd+shift+B
             "group": {

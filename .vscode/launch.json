@@ -5,8 +5,8 @@
         {
             "type": "playdate",
             "request": "launch",
-            "name": "Playdate: Debug",
-            "preLaunchTask": "${defaultBuildTask}"
+            "name": "Playdate: Build and Run (F5)",
+            "preLaunchTask": "Playdate: Build and Run"
         }
     ]
 }

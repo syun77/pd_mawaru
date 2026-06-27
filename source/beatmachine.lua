@@ -84,7 +84,7 @@ BeatMachine = {}
 
 function BeatMachine.CreateTrack()
 
-	track = {}
+	local track = {}
 
 	track.channel = nil
 	track.instrument = nil
