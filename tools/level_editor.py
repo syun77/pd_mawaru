@@ -23,7 +23,7 @@ import random
 import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
-
+# tkinterの存在チェック.
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
@@ -81,31 +81,36 @@ CLEAR_CONDITION_LABELS = {
 
 CLEAR_CONDITION_INTERNAL_VALUES = {label: value for value, label in CLEAR_CONDITION_LABELS.items()}
 
-
+# ステージルール.
 @dataclass
 class StageRules:
-    move_limit: Optional[int] = 10
-    time_limit: Optional[int] = None
-    manual_rise_enabled: bool = False
-    auto_rise_enabled: bool = False
-    auto_rise_interval: Optional[float] = None
+    move_limit: Optional[int] = 10 # 交換可能回数.
+    time_limit: Optional[int] = None # 制限時間(秒).
+    manual_rise_enabled: bool = False # Bボタンでの手動せり上げが可能かどうか.
+    auto_rise_enabled: bool = False # 一定時間の自動せり上げを行うか.
+    auto_rise_interval: Optional[float] = None # 自動せり上げの間隔(秒). Noneでデフォルト値を使用.
 
-
+# クリア条件.
+# ・eraseAll: 全消し
+# ・erasePanels: 一定数のパネルを消去
+# ・makeLoops: 指定数のループを作成
+# ・makeWrapLoop: 円環ループを作成
+# ・eraseMarked: マーク付きパネルを消去
 @dataclass
 class ClearCondition:
-    type: str = "eraseAll"
+    type: str = "eraseAll" # クリア条件文字列.
     count: Optional[int] = None
     mark: Optional[str] = None
 
-
+# ステージデータ.
 @dataclass
 class StageData:
     version: int = 1
     stage_id: str = "stage_001"
     name: str = "First Loop"
     pack: str = "tutorial"
-    columns: int = 10
-    rows: int = 6
+    columns: int = 10 # 列数.
+    rows: int = 6 # 行数.
     cells: List[List[int]] = field(default_factory=list)
     rules: StageRules = field(default_factory=StageRules)
     clear_condition: ClearCondition = field(default_factory=ClearCondition)
@@ -329,7 +334,9 @@ class BoardLogic:
                     result.append((col, row))
         return result
 
-
+# ------------------------------------------------------------------
+# レベルエディタ.
+# ------------------------------------------------------------------
 class LevelEditor(tk.Tk if tk is not None else object):
     def __init__(self):
         super().__init__()
@@ -353,6 +360,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.drag_target_cell: Optional[Tuple[int, int]] = None
         self.drag_started = False
         self.drag_moved = False
+        self.last_saved_path = None  # 最後に保存したファイルパスを保持する変数
 
         self._build_ui()
         self._bind_keys()
@@ -366,6 +374,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
 
         file_menu = tk.Menu(menu_bar, tearoff=False)
         file_menu.add_command(label="JSON保存", command=self.save_json)
+        file_menu.add_command(label="JSON上書き保存", command=self.save_json_overwrite)
         file_menu.add_command(label="JSON読込", command=self.load_json)
         file_menu.add_separator()
         file_menu.add_command(label="Luaステージ出力", command=self.export_lua)
@@ -561,8 +570,8 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.bind("2", lambda e: self.set_brush_and_cell(BACKSLASH))
         self.bind("3", lambda e: self.set_brush_and_cell(VALLEY))
         self.bind("4", lambda e: self.set_brush_and_cell(PEAK))
-        self.bind("s", lambda e: self.save_json())
-        self.bind("l", lambda e: self.load_json())
+        self.bind("<Command-s>", lambda e: self.save_json_overwrite())
+        self.bind("<Command-l>", lambda e: self.load_json())
         self.bind("e", lambda e: self.export_lua())
 
     # ------------------------------------------------------------------ Drawing
@@ -1033,7 +1042,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.refresh_and_draw()
 
     # ------------------------------------------------------------------ File I/O
-
+	# 名前をつけて保存.
     def save_json(self) -> None:
         try:
             data = self.to_json_dict()
@@ -1041,16 +1050,34 @@ class LevelEditor(tk.Tk if tk is not None else object):
             messagebox.showerror("エラー", f"ステージ設定の変換に失敗しました。\n{exc}")
             return
 
+		# 保存ファイルダイアログを表示.
         path = filedialog.asksaveasfilename(
             defaultextension=".json",
             filetypes=[("JSON", "*.json"), ("All files", "*.*")],
             initialfile=f"{self.stage.stage_id}.json",
         )
         if not path:
-            return
+            return # キャンセルされた場合は何もしない.
         with open(path, "w", encoding="utf-8") as f:
+            # JSONを整形して保存.
             json.dump(data, f, ensure_ascii=False, indent=2)
+            # 最後に保存したパスを保持.
+            self.last_saved_path = path
 
+	# 保存ダイアログなしで上書き保存.
+    def save_json_overwrite(self) -> None:
+        if not self.last_saved_path:
+            self.save_json()  # 保存ダイアログを表示して保存.
+            return
+        try:
+            data = self.to_json_dict()
+        except Exception as exc:
+            messagebox.showerror("エラー", f"ステージ設定の変換に失敗しました。\n{exc}")
+            return
+
+        with open(self.last_saved_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    # jsonの読み込み.
     def load_json(self) -> None:
         path = filedialog.askopenfilename(filetypes=[("JSON", "*.json"), ("All files", "*.*")])
         if not path:
@@ -1059,9 +1086,10 @@ class LevelEditor(tk.Tk if tk is not None else object):
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self.load_from_json_dict(data)
+            self.last_saved_path = path # 最後に読み込んだパスを保持.
         except Exception as exc:
             messagebox.showerror("エラー", f"JSON読込に失敗しました。\n{exc}")
-
+    # Luaに書き出す.
     def export_lua(self) -> None:
         try:
             lua = self.to_lua_string()
@@ -1078,7 +1106,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
             return
         with open(path, "w", encoding="utf-8") as f:
             f.write(lua)
-
+    # Lua文字列をクリップボードにコピーする.
     def copy_lua_to_clipboard(self) -> None:
         try:
             lua = self.to_lua_string()
