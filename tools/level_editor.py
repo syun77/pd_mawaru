@@ -1,0 +1,1021 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+level_editor.py
+
+Playdate向け円環ライン接続パズル pd_mawaru の簡易レベルエディタです。
+
+主な機能:
+- 可変サイズの盤面編集
+- 4種類のパネル配置
+- board.lua の checkEraseList 相当のループ検出
+- 消去対象ハイライト
+- JSON保存/読込
+- Luaステージデータ出力
+
+Python 3.10+ 推奨。標準ライブラリのみ使用します。
+"""
+
+from __future__ import annotations
+
+import json
+import random
+import sys
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set, Tuple
+
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, ttk
+    TK_IMPORT_ERROR = None
+except ModuleNotFoundError as exc:
+    tk = None
+    filedialog = None
+    messagebox = None
+    ttk = None
+    TK_IMPORT_ERROR = exc
+
+
+# board.lua の BLOCK と合わせる
+EMPTY = 0
+SLASH = 1       # /
+BACKSLASH = 2   # \
+VALLEY = 3      # \/ 谷型: 上辺側の2点を接続
+PEAK = 4        # /\ 山型: 下辺側の2点を接続
+
+BLOCK_NAMES = {
+    EMPTY: "EMPTY",
+    SLASH: "SLASH /",
+    BACKSLASH: "BACKSLASH \\",
+    VALLEY: r"VALLEY \/",
+    PEAK: "PEAK /\\",
+}
+
+BLOCK_SHORT = {
+    EMPTY: ".",
+    SLASH: "/",
+    BACKSLASH: "\\",
+    VALLEY: "V",
+    PEAK: "A",
+}
+
+
+@dataclass
+class StageRules:
+    move_limit: Optional[int] = 10
+    time_limit: Optional[int] = None
+    manual_rise_enabled: bool = True
+    auto_rise_enabled: bool = False
+    auto_rise_interval: Optional[float] = None
+
+
+@dataclass
+class ClearCondition:
+    type: str = "eraseAll"
+    count: Optional[int] = None
+    mark: Optional[str] = None
+
+
+@dataclass
+class StageData:
+    version: int = 1
+    stage_id: str = "stage_001"
+    name: str = "First Loop"
+    pack: str = "tutorial"
+    columns: int = 10
+    rows: int = 6
+    cells: List[List[int]] = field(default_factory=list)
+    rules: StageRules = field(default_factory=StageRules)
+    clear_condition: ClearCondition = field(default_factory=ClearCondition)
+    rise_queue: List[List[int]] = field(default_factory=list)
+    notes: str = ""
+
+    def ensure_cells(self) -> None:
+        if not self.cells:
+            self.cells = [[EMPTY for _ in range(self.columns)] for _ in range(self.rows)]
+            return
+
+        # 行数・列数が足りない/多い場合は調整
+        new_cells = [[EMPTY for _ in range(self.columns)] for _ in range(self.rows)]
+        for r in range(min(self.rows, len(self.cells))):
+            for c in range(min(self.columns, len(self.cells[r]))):
+                v = int(self.cells[r][c])
+                new_cells[r][c] = v if EMPTY <= v <= PEAK else EMPTY
+        self.cells = new_cells
+
+
+class BoardLogic:
+    """board.lua の接続・消去判定をPythonへ移植したロジック。"""
+
+    def __init__(self, columns: int, rows: int, cells: List[List[int]]):
+        self.columns = columns
+        self.rows = rows
+        self.cells = cells
+
+    def get_index(self, col: int, row: int) -> int:
+        """Lua版Array2Dと同じ1始まりindex。col,rowも1始まり。"""
+        if col < 1 or col > self.columns or row < 1 or row > self.rows:
+            return -1
+        return (row - 1) * self.columns + col
+
+    def index_to_cell(self, index: int) -> Tuple[int, int]:
+        col = ((index - 1) % self.columns) + 1
+        row = ((index - 1) // self.columns) + 1
+        return col, row
+
+    def get_cell(self, col: int, row: int) -> int:
+        return self.cells[row - 1][col - 1]
+
+    def get_node_id(self, column_boundary: int, row_boundary: int) -> int:
+        # board.lua:
+        # local normalizedColumn = ((columnBoundary - 1) % columns) + 1
+        # return rowBoundary * columns + normalizedColumn
+        normalized_column = ((column_boundary - 1) % self.columns) + 1
+        return row_boundary * self.columns + normalized_column
+
+    def get_cell_edge(self, col: int, row: int, block_type: int) -> Tuple[Optional[int], Optional[int]]:
+        # board.luaの意味に合わせる。
+        # outer = row, inner = row + 1
+        outer_left = self.get_node_id(col, row)
+        outer_right = self.get_node_id(col + 1, row)
+        inner_left = self.get_node_id(col, row + 1)
+        inner_right = self.get_node_id(col + 1, row + 1)
+
+        if block_type == SLASH:
+            return inner_left, outer_right
+        if block_type == BACKSLASH:
+            return outer_left, inner_right
+        if block_type == VALLEY:
+            return outer_left, outer_right
+        if block_type == PEAK:
+            return inner_left, inner_right
+        return None, None
+
+    @staticmethod
+    def add_adjacency(adjacency: Dict[int, List[int]], lookup: Dict[int, Set[int]], a: int, b: int) -> None:
+        if a not in lookup:
+            lookup[a] = set()
+            adjacency[a] = []
+        if b not in lookup:
+            lookup[b] = set()
+            adjacency[b] = []
+        if b not in lookup[a]:
+            lookup[a].add(b)
+            lookup[b].add(a)
+            adjacency[a].append(b)
+            adjacency[b].append(a)
+
+    def build_cell_graph(self) -> Tuple[Dict[int, List[int]], Dict[int, List[int]], Dict[int, Tuple[int, int]]]:
+        node_to_cells: Dict[int, List[int]] = {}
+        edge_by_index: Dict[int, Tuple[int, int]] = {}
+        adjacency: Dict[int, List[int]] = {}
+        adjacency_lookup: Dict[int, Set[int]] = {}
+
+        for row in range(1, self.rows + 1):
+            for col in range(1, self.columns + 1):
+                block_type = self.get_cell(col, row)
+                if block_type == EMPTY:
+                    continue
+
+                index = self.get_index(col, row)
+                a, b = self.get_cell_edge(col, row, block_type)
+                if a is None or b is None:
+                    continue
+
+                edge_by_index[index] = (a, b)
+                node_to_cells.setdefault(a, []).append(index)
+                node_to_cells.setdefault(b, []).append(index)
+
+        # 同一ノードを共有するセル同士を隣接扱いにする
+        for cells_at_node in node_to_cells.values():
+            for i in range(len(cells_at_node)):
+                for j in range(i + 1, len(cells_at_node)):
+                    self.add_adjacency(adjacency, adjacency_lookup, cells_at_node[i], cells_at_node[j])
+
+        return adjacency, node_to_cells, edge_by_index
+
+    def is_edge_in_cycle(
+        self,
+        edge_index: int,
+        edge_by_index: Dict[int, Tuple[int, int]],
+        node_to_cells: Dict[int, List[int]],
+    ) -> bool:
+        edge = edge_by_index.get(edge_index)
+        if edge is None:
+            return False
+
+        start_node, goal_node = edge
+        queue = [start_node]
+        head = 0
+        visited_nodes = {start_node}
+
+        while head < len(queue):
+            current_node = queue[head]
+            head += 1
+
+            for next_edge_index in node_to_cells.get(current_node, []):
+                if next_edge_index == edge_index:
+                    continue
+
+                next_edge = edge_by_index.get(next_edge_index)
+                if next_edge is None:
+                    continue
+
+                a, b = next_edge
+                if a == current_node:
+                    next_node = b
+                elif b == current_node:
+                    next_node = a
+                else:
+                    continue
+
+                if next_node == goal_node:
+                    return True
+
+                if next_node not in visited_nodes:
+                    visited_nodes.add(next_node)
+                    queue.append(next_node)
+
+        return False
+
+    def collect_connected_indices(
+        self,
+        start_index: int,
+        adjacency: Dict[int, List[int]],
+        allow_set: Set[int],
+        visited: Set[int],
+    ) -> List[int]:
+        ordered: List[int] = []
+        stack = [start_index]
+
+        while stack:
+            current = stack.pop()
+            if current in visited or current not in allow_set:
+                continue
+
+            visited.add(current)
+            ordered.append(current)
+
+            for neighbor in adjacency.get(current, []):
+                if neighbor in allow_set and neighbor not in visited:
+                    stack.append(neighbor)
+
+        return ordered
+
+    def check_erase_groups(self) -> List[List[int]]:
+        adjacency, node_to_cells, edge_by_index = self.build_cell_graph()
+        cycle_cell_set: Set[int] = set()
+        max_index = self.columns * self.rows
+
+        for edge_index in range(1, max_index + 1):
+            if edge_index in edge_by_index and self.is_edge_in_cycle(edge_index, edge_by_index, node_to_cells):
+                cycle_cell_set.add(edge_index)
+
+        visited: Set[int] = set()
+        groups: List[List[int]] = []
+
+        for row in range(1, self.rows + 1):
+            for col in range(1, self.columns + 1):
+                index = self.get_index(col, row)
+                block_type = self.get_cell(col, row)
+                if block_type != EMPTY and index in cycle_cell_set and index not in visited:
+                    component = self.collect_connected_indices(index, adjacency, cycle_cell_set, visited)
+                    if component:
+                        groups.append(component)
+
+        return groups
+
+    def check_erase_coords(self) -> Set[Tuple[int, int]]:
+        coords: Set[Tuple[int, int]] = set()
+        for group in self.check_erase_groups():
+            for index in group:
+                coords.add(self.index_to_cell(index))
+        return coords
+
+    def one_move_loop_candidates(self) -> List[Tuple[int, int]]:
+        """上下入れ替え1手でループができる候補を返す。戻り値は1始まり(col,row)。"""
+        result: List[Tuple[int, int]] = []
+        if self.check_erase_groups():
+            return result
+
+        for row in range(2, self.rows + 1):
+            for col in range(1, self.columns + 1):
+                copied = [line[:] for line in self.cells]
+                copied[row - 1][col - 1], copied[row - 2][col - 1] = copied[row - 2][col - 1], copied[row - 1][col - 1]
+                logic = BoardLogic(self.columns, self.rows, copied)
+                if logic.check_erase_groups():
+                    result.append((col, row))
+        return result
+
+
+class LevelEditor(tk.Tk if tk is not None else object):
+    def __init__(self):
+        super().__init__()
+        self.title("pd_mawaru Level Editor")
+        self.geometry("1060x720")
+        self.minsize(900, 600)
+
+        self.stage = StageData()
+        self.stage.ensure_cells()
+
+        self.cell_size = 56
+        self.margin = 24
+        self.selected_col = 1
+        self.selected_row = 1
+        self.current_block = SLASH
+        self.show_erase_preview = tk.BooleanVar(value=True)
+        self.show_wrap_columns = tk.BooleanVar(value=True)
+        self.erase_coords: Set[Tuple[int, int]] = set()
+        self.one_move_candidates: List[Tuple[int, int]] = []
+
+        self._build_ui()
+        self._bind_keys()
+        self.refresh_analysis()
+        self.draw_board()
+
+    # ------------------------------------------------------------------ UI
+
+    def _build_ui(self) -> None:
+        root = ttk.Frame(self)
+        root.pack(fill=tk.BOTH, expand=True)
+
+        left = ttk.Frame(root)
+        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.canvas = tk.Canvas(left, bg="white", highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+        self.canvas.bind("<Button-1>", self.on_left_click)
+        self.canvas.bind("<Button-3>", self.on_right_click)
+        self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)
+
+        bottom = ttk.Frame(left)
+        bottom.pack(fill=tk.X, padx=8, pady=6)
+        ttk.Button(bottom, text="消去プレビュー更新", command=self.refresh_and_draw).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bottom, text="1手候補", command=self.show_one_move_candidates).pack(side=tk.LEFT, padx=2)
+        ttk.Checkbutton(bottom, text="消去対象を表示", variable=self.show_erase_preview, command=self.draw_board).pack(side=tk.LEFT, padx=8)
+        ttk.Checkbutton(bottom, text="左右複製列を表示", variable=self.show_wrap_columns, command=self.draw_board).pack(side=tk.LEFT, padx=8)
+
+        right = ttk.Frame(root, width=300)
+        right.pack(side=tk.RIGHT, fill=tk.Y, padx=8, pady=8)
+        right.pack_propagate(False)
+
+        self._build_stage_panel(right)
+        self._build_brush_panel(right)
+        self._build_edit_panel(right)
+        self._build_file_panel(right)
+        self._build_info_panel(right)
+
+    def _build_stage_panel(self, parent: ttk.Frame) -> None:
+        group = ttk.LabelFrame(parent, text="ステージ設定")
+        group.pack(fill=tk.X, pady=4)
+
+        self.var_stage_id = tk.StringVar(value=self.stage.stage_id)
+        self.var_name = tk.StringVar(value=self.stage.name)
+        self.var_pack = tk.StringVar(value=self.stage.pack)
+        self.var_columns = tk.IntVar(value=self.stage.columns)
+        self.var_rows = tk.IntVar(value=self.stage.rows)
+        self.var_move_limit = tk.StringVar(value=str(self.stage.rules.move_limit or ""))
+        self.var_clear_type = tk.StringVar(value=self.stage.clear_condition.type)
+        self.var_clear_count = tk.StringVar(value="" if self.stage.clear_condition.count is None else str(self.stage.clear_condition.count))
+        self.var_manual_rise = tk.BooleanVar(value=self.stage.rules.manual_rise_enabled)
+        self.var_auto_rise = tk.BooleanVar(value=self.stage.rules.auto_rise_enabled)
+
+        self._labeled_entry(group, "id", self.var_stage_id)
+        self._labeled_entry(group, "name", self.var_name)
+        self._labeled_entry(group, "pack", self.var_pack)
+
+        size_row = ttk.Frame(group)
+        size_row.pack(fill=tk.X, padx=6, pady=2)
+        ttk.Label(size_row, text="columns", width=10).pack(side=tk.LEFT)
+        ttk.Spinbox(size_row, from_=4, to=24, textvariable=self.var_columns, width=5).pack(side=tk.LEFT)
+        ttk.Label(size_row, text="rows", width=6).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Spinbox(size_row, from_=3, to=12, textvariable=self.var_rows, width=5).pack(side=tk.LEFT)
+        ttk.Button(size_row, text="適用", command=self.apply_resize).pack(side=tk.RIGHT)
+
+        self._labeled_entry(group, "moveLimit", self.var_move_limit)
+
+        row = ttk.Frame(group)
+        row.pack(fill=tk.X, padx=6, pady=2)
+        ttk.Label(row, text="clear", width=10).pack(side=tk.LEFT)
+        clear_combo = ttk.Combobox(
+            row,
+            textvariable=self.var_clear_type,
+            state="readonly",
+            values=["eraseAll", "erasePanels", "makeLoops", "makeWrapLoop", "eraseMarked"],
+            width=15,
+        )
+        clear_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self._labeled_entry(group, "clearCount", self.var_clear_count)
+        ttk.Checkbutton(group, text="manualRiseEnabled", variable=self.var_manual_rise).pack(anchor=tk.W, padx=6)
+        ttk.Checkbutton(group, text="autoRiseEnabled", variable=self.var_auto_rise).pack(anchor=tk.W, padx=6)
+
+    def _build_brush_panel(self, parent: ttk.Frame) -> None:
+        group = ttk.LabelFrame(parent, text="ブラシ")
+        group.pack(fill=tk.X, pady=4)
+
+        for value in [EMPTY, SLASH, BACKSLASH, VALLEY, PEAK]:
+            ttk.Radiobutton(
+                group,
+                text=f"{value}: {BLOCK_NAMES[value]}",
+                value=value,
+                command=self.draw_board,
+                variable=tk.IntVar(value=self.current_block),
+            ).pack(anchor=tk.W)
+
+        # Radiobuttonに個別IntVarを渡すと状態共有されないため、明示的なボタン群にする
+        for child in group.winfo_children():
+            child.destroy()
+        self.var_brush = tk.IntVar(value=self.current_block)
+        for value in [EMPTY, SLASH, BACKSLASH, VALLEY, PEAK]:
+            ttk.Radiobutton(
+                group,
+                text=f"{value}: {BLOCK_NAMES[value]}",
+                value=value,
+                variable=self.var_brush,
+                command=self.on_brush_changed,
+            ).pack(anchor=tk.W, padx=6)
+
+        ttk.Label(group, text="キー: 0-4 / Spaceでセル切替 / 右クリックで空白").pack(anchor=tk.W, padx=6, pady=(4, 2))
+
+    def _build_edit_panel(self, parent: ttk.Frame) -> None:
+        group = ttk.LabelFrame(parent, text="編集")
+        group.pack(fill=tk.X, pady=4)
+
+        row = ttk.Frame(group)
+        row.pack(fill=tk.X, padx=6, pady=2)
+        ttk.Button(row, text="全消去", command=self.clear_board).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+        ttk.Button(row, text="ランダム", command=self.randomize_board).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+
+        row = ttk.Frame(group)
+        row.pack(fill=tk.X, padx=6, pady=2)
+        ttk.Button(row, text="左へ回転", command=lambda: self.rotate_columns(-1)).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+        ttk.Button(row, text="右へ回転", command=lambda: self.rotate_columns(1)).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+
+        row = ttk.Frame(group)
+        row.pack(fill=tk.X, padx=6, pady=2)
+        ttk.Button(row, text="選択列↑", command=lambda: self.shift_column(-1)).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+        ttk.Button(row, text="選択列↓", command=lambda: self.shift_column(1)).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+
+    def _build_file_panel(self, parent: ttk.Frame) -> None:
+        group = ttk.LabelFrame(parent, text="ファイル")
+        group.pack(fill=tk.X, pady=4)
+
+        ttk.Button(group, text="JSON保存", command=self.save_json).pack(fill=tk.X, padx=6, pady=2)
+        ttk.Button(group, text="JSON読込", command=self.load_json).pack(fill=tk.X, padx=6, pady=2)
+        ttk.Button(group, text="Luaステージ出力", command=self.export_lua).pack(fill=tk.X, padx=6, pady=2)
+        ttk.Button(group, text="クリップボードへLuaコピー", command=self.copy_lua_to_clipboard).pack(fill=tk.X, padx=6, pady=2)
+
+    def _build_info_panel(self, parent: ttk.Frame) -> None:
+        group = ttk.LabelFrame(parent, text="解析情報")
+        group.pack(fill=tk.BOTH, expand=True, pady=4)
+
+        self.info_text = tk.Text(group, height=12, wrap=tk.WORD)
+        self.info_text.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        self.info_text.configure(state=tk.DISABLED)
+
+    @staticmethod
+    def _labeled_entry(parent: ttk.Frame, label: str, variable: tk.Variable) -> None:
+        row = ttk.Frame(parent)
+        row.pack(fill=tk.X, padx=6, pady=2)
+        ttk.Label(row, text=label, width=10).pack(side=tk.LEFT)
+        ttk.Entry(row, textvariable=variable).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    def _bind_keys(self) -> None:
+        self.bind("<Left>", lambda e: self.move_selection(-1, 0))
+        self.bind("<Right>", lambda e: self.move_selection(1, 0))
+        self.bind("<Up>", lambda e: self.move_selection(0, -1))
+        self.bind("<Down>", lambda e: self.move_selection(0, 1))
+        self.bind("<space>", lambda e: self.cycle_selected_cell())
+        self.bind("<Delete>", lambda e: self.set_selected_cell(EMPTY))
+        self.bind("0", lambda e: self.set_brush_and_cell(EMPTY))
+        self.bind("1", lambda e: self.set_brush_and_cell(SLASH))
+        self.bind("2", lambda e: self.set_brush_and_cell(BACKSLASH))
+        self.bind("3", lambda e: self.set_brush_and_cell(VALLEY))
+        self.bind("4", lambda e: self.set_brush_and_cell(PEAK))
+        self.bind("s", lambda e: self.save_json())
+        self.bind("l", lambda e: self.load_json())
+        self.bind("e", lambda e: self.export_lua())
+
+    # ------------------------------------------------------------------ Drawing
+
+    def draw_board(self) -> None:
+        self.canvas.delete("all")
+        cols = self.stage.columns
+        rows = self.stage.rows
+        size = self.cell_size
+        margin = self.margin
+        show_wrap = self.show_wrap_columns.get()
+        wrap_offset = 1 if show_wrap else 0
+        total_cols = cols + (2 if show_wrap else 0)
+
+        canvas_width = margin * 2 + total_cols * size
+        canvas_height = margin * 2 + rows * size + 40
+        self.canvas.configure(scrollregion=(0, 0, canvas_width, canvas_height))
+
+        self.canvas.create_text(
+            margin,
+            12,
+            anchor=tk.W,
+            text="矩形表示です。左右端は円環接続として判定されます。薄い複製列は編集対象外です。",
+            fill="#555",
+        )
+
+        for display_col in range(total_cols):
+            actual_col = display_col - wrap_offset + 1
+            is_wrap_copy = False
+            if show_wrap:
+                if display_col == 0:
+                    actual_col = cols
+                    is_wrap_copy = True
+                elif display_col == total_cols - 1:
+                    actual_col = 1
+                    is_wrap_copy = True
+            actual_col = ((actual_col - 1) % cols) + 1
+
+            for row in range(1, rows + 1):
+                x = margin + display_col * size
+                y = margin + row * size
+                self.draw_cell(x, y, actual_col, row, is_wrap_copy)
+
+        # 列番号・行番号
+        for display_col in range(total_cols):
+            actual_col = display_col - wrap_offset + 1
+            if show_wrap and display_col == 0:
+                label = f"{cols}*"
+            elif show_wrap and display_col == total_cols - 1:
+                label = "1*"
+            else:
+                actual_col = ((actual_col - 1) % cols) + 1
+                label = str(actual_col)
+            x = margin + display_col * size + size / 2
+            self.canvas.create_text(x, margin + 20, text=label, fill="#555")
+
+        for row in range(1, rows + 1):
+            self.canvas.create_text(margin - 10, margin + row * size + size / 2, text=str(row), anchor=tk.E, fill="#555")
+
+    def draw_cell(self, x: int, y: int, col: int, row: int, is_wrap_copy: bool) -> None:
+        size = self.cell_size
+        block = self.stage.cells[row - 1][col - 1]
+        is_selected = (col == self.selected_col and row == self.selected_row and not is_wrap_copy)
+        is_erase = (col, row) in self.erase_coords and self.show_erase_preview.get()
+        is_one_move = (col, row) in self.one_move_candidates
+
+        fill = "#ffffff"
+        outline = "#b0b0b0"
+        if is_wrap_copy:
+            fill = "#f6f6f6"
+            outline = "#d6d6d6"
+        if is_erase:
+            fill = "#ffe6e6"
+        if is_one_move and not is_erase:
+            fill = "#eef5ff"
+        if is_selected:
+            outline = "#000000"
+
+        self.canvas.create_rectangle(x, y, x + size, y + size, fill=fill, outline=outline, width=3 if is_selected else 1)
+
+        if is_wrap_copy:
+            self.canvas.create_rectangle(x + 4, y + 4, x + size - 4, y + size - 4, outline="#eeeeee")
+
+        if block == EMPTY:
+            return
+
+        pad = 9
+        left = x + pad
+        right = x + size - pad
+        top = y + pad
+        bottom = y + size - pad
+        mid_x = x + size / 2
+        mid_y = y + size / 2
+        line_width = 4
+        line_fill = "#222222" if not is_wrap_copy else "#999999"
+
+        if block == SLASH:
+            self.canvas.create_line(left, bottom, right, top, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+        elif block == BACKSLASH:
+            self.canvas.create_line(left, top, right, bottom, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+        elif block == VALLEY:
+            apex_y = top + (bottom - top) * 0.65
+            self.canvas.create_line(left, top, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+            self.canvas.create_line(right, top, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+        elif block == PEAK:
+            apex_y = top + (bottom - top) * 0.35
+            self.canvas.create_line(left, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+            self.canvas.create_line(right, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+
+        self.canvas.create_text(x + size - 7, y + size - 7, text=BLOCK_SHORT[block], fill="#777", font=("TkDefaultFont", 8))
+
+    # ------------------------------------------------------------------ Events
+
+    def canvas_to_cell(self, event_x: int, event_y: int) -> Optional[Tuple[int, int]]:
+        size = self.cell_size
+        margin = self.margin
+        show_wrap = self.show_wrap_columns.get()
+        wrap_offset = 1 if show_wrap else 0
+        display_col = int((event_x - margin) // size)
+        row = int((event_y - margin) // size)
+
+        if row < 1 or row > self.stage.rows:
+            return None
+
+        total_cols = self.stage.columns + (2 if show_wrap else 0)
+        if display_col < 0 or display_col >= total_cols:
+            return None
+
+        if show_wrap and (display_col == 0 or display_col == total_cols - 1):
+            return None
+
+        col = display_col - wrap_offset + 1
+        if col < 1 or col > self.stage.columns:
+            return None
+        return col, row
+
+    def on_left_click(self, event: tk.Event) -> None:
+        cell = self.canvas_to_cell(event.x, event.y)
+        if cell is None:
+            return
+        self.selected_col, self.selected_row = cell
+        self.set_selected_cell(self.current_block)
+
+    def on_right_click(self, event: tk.Event) -> None:
+        cell = self.canvas_to_cell(event.x, event.y)
+        if cell is None:
+            return
+        self.selected_col, self.selected_row = cell
+        self.set_selected_cell(EMPTY)
+
+    def on_mouse_wheel(self, event: tk.Event) -> None:
+        cell = self.canvas_to_cell(event.x, event.y)
+        if cell is None:
+            return
+        self.selected_col, self.selected_row = cell
+        delta = 1 if event.delta > 0 else -1
+        current = self.stage.cells[self.selected_row - 1][self.selected_col - 1]
+        self.set_selected_cell((current + delta) % 5)
+
+    def on_brush_changed(self) -> None:
+        self.current_block = int(self.var_brush.get())
+        self.draw_board()
+
+    def move_selection(self, dx: int, dy: int) -> None:
+        self.selected_col = ((self.selected_col + dx - 1) % self.stage.columns) + 1
+        self.selected_row = max(1, min(self.stage.rows, self.selected_row + dy))
+        self.draw_board()
+
+    def set_brush_and_cell(self, value: int) -> None:
+        self.current_block = value
+        self.var_brush.set(value)
+        self.set_selected_cell(value)
+
+    def set_selected_cell(self, value: int) -> None:
+        self.stage.cells[self.selected_row - 1][self.selected_col - 1] = value
+        self.one_move_candidates = []
+        self.refresh_and_draw()
+
+    def cycle_selected_cell(self) -> None:
+        current = self.stage.cells[self.selected_row - 1][self.selected_col - 1]
+        self.set_selected_cell((current + 1) % 5)
+
+    # ------------------------------------------------------------------ Editing
+
+    def apply_resize(self) -> None:
+        try:
+            columns = int(self.var_columns.get())
+            rows = int(self.var_rows.get())
+        except Exception:
+            messagebox.showerror("エラー", "columns/rows は整数で指定してください。")
+            return
+
+        if not (4 <= columns <= 24 and 3 <= rows <= 12):
+            messagebox.showerror("エラー", "columns は4〜24、rows は3〜12の範囲にしてください。")
+            return
+
+        self.stage.columns = columns
+        self.stage.rows = rows
+        self.stage.ensure_cells()
+        self.selected_col = min(self.selected_col, columns)
+        self.selected_row = min(self.selected_row, rows)
+        self.refresh_and_draw()
+
+    def clear_board(self) -> None:
+        self.stage.cells = [[EMPTY for _ in range(self.stage.columns)] for _ in range(self.stage.rows)]
+        self.one_move_candidates = []
+        self.refresh_and_draw()
+
+    def randomize_board(self) -> None:
+        for r in range(self.stage.rows):
+            for c in range(self.stage.columns):
+                self.stage.cells[r][c] = random.randint(1, 4)
+        self.one_move_candidates = []
+        self.refresh_and_draw()
+
+    def rotate_columns(self, direction: int) -> None:
+        # direction = 1: 右へ、-1: 左へ
+        for r in range(self.stage.rows):
+            row = self.stage.cells[r]
+            if direction > 0:
+                self.stage.cells[r] = [row[-1]] + row[:-1]
+            else:
+                self.stage.cells[r] = row[1:] + [row[0]]
+        self.one_move_candidates = []
+        self.refresh_and_draw()
+
+    def shift_column(self, direction: int) -> None:
+        col = self.selected_col - 1
+        values = [self.stage.cells[r][col] for r in range(self.stage.rows)]
+        if direction > 0:
+            values = [values[-1]] + values[:-1]
+        else:
+            values = values[1:] + [values[0]]
+        for r in range(self.stage.rows):
+            self.stage.cells[r][col] = values[r]
+        self.one_move_candidates = []
+        self.refresh_and_draw()
+
+    # ------------------------------------------------------------------ Analysis
+
+    def get_logic(self) -> BoardLogic:
+        return BoardLogic(self.stage.columns, self.stage.rows, self.stage.cells)
+
+    def refresh_analysis(self) -> None:
+        logic = self.get_logic()
+        groups = logic.check_erase_groups()
+        self.erase_coords = set()
+        for group in groups:
+            for index in group:
+                self.erase_coords.add(logic.index_to_cell(index))
+
+        filled = sum(1 for row in self.stage.cells for v in row if v != EMPTY)
+        empty = self.stage.columns * self.stage.rows - filled
+        wrap_used = self.has_wrap_loop(groups, logic)
+
+        info = []
+        info.append(f"サイズ: {self.stage.columns} x {self.stage.rows}")
+        info.append(f"配置済み: {filled} / 空白: {empty}")
+        info.append(f"消去グループ数: {len(groups)}")
+        info.append(f"消去パネル数: {len(self.erase_coords)}")
+        info.append(f"左右またぎを含む可能性: {'あり' if wrap_used else 'なし'}")
+        if self.one_move_candidates:
+            info.append(f"1手消去候補: {len(self.one_move_candidates)}")
+            preview = ", ".join(f"({c},{r})" for c, r in self.one_move_candidates[:12])
+            info.append(preview + (" ..." if len(self.one_move_candidates) > 12 else ""))
+        else:
+            info.append("1手消去候補: 未計算")
+
+        if groups:
+            info.append("")
+            info.append("消去グループ:")
+            for i, group in enumerate(groups, start=1):
+                coords = [logic.index_to_cell(index) for index in group]
+                info.append(f"  {i}: {len(group)}枚 {coords}")
+
+        self.info_text.configure(state=tk.NORMAL)
+        self.info_text.delete("1.0", tk.END)
+        self.info_text.insert(tk.END, "\n".join(info))
+        self.info_text.configure(state=tk.DISABLED)
+
+    def has_wrap_loop(self, groups: List[List[int]], logic: BoardLogic) -> bool:
+        """
+        厳密な幾何判定ではなく、消去対象セルが1列目と最終列の両方にまたがる場合を
+        左右またぎ候補として扱う。
+        """
+        for group in groups:
+            cols = {logic.index_to_cell(index)[0] for index in group}
+            if 1 in cols and self.stage.columns in cols:
+                return True
+        return False
+
+    def refresh_and_draw(self) -> None:
+        self.refresh_analysis()
+        self.draw_board()
+
+    def show_one_move_candidates(self) -> None:
+        self.one_move_candidates = self.get_logic().one_move_loop_candidates()
+        self.refresh_and_draw()
+
+    # ------------------------------------------------------------------ Stage conversion
+
+    def sync_stage_from_ui(self) -> None:
+        self.stage.stage_id = self.var_stage_id.get().strip() or "stage_001"
+        self.stage.name = self.var_name.get().strip() or self.stage.stage_id
+        self.stage.pack = self.var_pack.get().strip() or "default"
+        self.stage.rules.manual_rise_enabled = bool(self.var_manual_rise.get())
+        self.stage.rules.auto_rise_enabled = bool(self.var_auto_rise.get())
+
+        move_limit_text = self.var_move_limit.get().strip()
+        self.stage.rules.move_limit = int(move_limit_text) if move_limit_text else None
+
+        clear_count_text = self.var_clear_count.get().strip()
+        self.stage.clear_condition.type = self.var_clear_type.get().strip() or "eraseAll"
+        self.stage.clear_condition.count = int(clear_count_text) if clear_count_text else None
+
+    def sync_ui_from_stage(self) -> None:
+        self.var_stage_id.set(self.stage.stage_id)
+        self.var_name.set(self.stage.name)
+        self.var_pack.set(self.stage.pack)
+        self.var_columns.set(self.stage.columns)
+        self.var_rows.set(self.stage.rows)
+        self.var_move_limit.set("" if self.stage.rules.move_limit is None else str(self.stage.rules.move_limit))
+        self.var_clear_type.set(self.stage.clear_condition.type)
+        self.var_clear_count.set("" if self.stage.clear_condition.count is None else str(self.stage.clear_condition.count))
+        self.var_manual_rise.set(self.stage.rules.manual_rise_enabled)
+        self.var_auto_rise.set(self.stage.rules.auto_rise_enabled)
+
+    def to_json_dict(self) -> dict:
+        self.sync_stage_from_ui()
+        return {
+            "version": self.stage.version,
+            "id": self.stage.stage_id,
+            "name": self.stage.name,
+            "pack": self.stage.pack,
+            "board": {
+                "columns": self.stage.columns,
+                "rows": self.stage.rows,
+                "cells": self.stage.cells,
+            },
+            "rules": {
+                "moveLimit": self.stage.rules.move_limit,
+                "timeLimit": self.stage.rules.time_limit,
+                "manualRiseEnabled": self.stage.rules.manual_rise_enabled,
+                "autoRiseEnabled": self.stage.rules.auto_rise_enabled,
+                "autoRiseInterval": self.stage.rules.auto_rise_interval,
+            },
+            "riseQueue": self.stage.rise_queue,
+            "clearCondition": {
+                "type": self.stage.clear_condition.type,
+                "count": self.stage.clear_condition.count,
+                "mark": self.stage.clear_condition.mark,
+            },
+            "notes": self.stage.notes,
+        }
+
+    def load_from_json_dict(self, data: dict) -> None:
+        board = data.get("board", {})
+        rules = data.get("rules", {})
+        clear = data.get("clearCondition", {})
+
+        self.stage = StageData(
+            version=int(data.get("version", 1)),
+            stage_id=str(data.get("id", "stage_001")),
+            name=str(data.get("name", "First Loop")),
+            pack=str(data.get("pack", "tutorial")),
+            columns=int(board.get("columns", 10)),
+            rows=int(board.get("rows", 6)),
+            cells=board.get("cells", []),
+            rules=StageRules(
+                move_limit=rules.get("moveLimit", 10),
+                time_limit=rules.get("timeLimit"),
+                manual_rise_enabled=bool(rules.get("manualRiseEnabled", True)),
+                auto_rise_enabled=bool(rules.get("autoRiseEnabled", False)),
+                auto_rise_interval=rules.get("autoRiseInterval"),
+            ),
+            clear_condition=ClearCondition(
+                type=str(clear.get("type", "eraseAll")),
+                count=clear.get("count"),
+                mark=clear.get("mark"),
+            ),
+            rise_queue=data.get("riseQueue", []),
+            notes=str(data.get("notes", "")),
+        )
+        self.stage.ensure_cells()
+        self.selected_col = min(max(self.selected_col, 1), self.stage.columns)
+        self.selected_row = min(max(self.selected_row, 1), self.stage.rows)
+        self.sync_ui_from_stage()
+        self.one_move_candidates = []
+        self.refresh_and_draw()
+
+    # ------------------------------------------------------------------ File I/O
+
+    def save_json(self) -> None:
+        try:
+            data = self.to_json_dict()
+        except Exception as exc:
+            messagebox.showerror("エラー", f"ステージ設定の変換に失敗しました。\n{exc}")
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+            initialfile=f"{self.stage.stage_id}.json",
+        )
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def load_json(self) -> None:
+        path = filedialog.askopenfilename(filetypes=[("JSON", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.load_from_json_dict(data)
+        except Exception as exc:
+            messagebox.showerror("エラー", f"JSON読込に失敗しました。\n{exc}")
+
+    def export_lua(self) -> None:
+        try:
+            lua = self.to_lua_string()
+        except Exception as exc:
+            messagebox.showerror("エラー", f"Lua出力に失敗しました。\n{exc}")
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".lua",
+            filetypes=[("Lua", "*.lua"), ("All files", "*.*")],
+            initialfile=f"{self.stage.stage_id}.lua",
+        )
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(lua)
+
+    def copy_lua_to_clipboard(self) -> None:
+        try:
+            lua = self.to_lua_string()
+        except Exception as exc:
+            messagebox.showerror("エラー", f"Lua変換に失敗しました。\n{exc}")
+            return
+        self.clipboard_clear()
+        self.clipboard_append(lua)
+        messagebox.showinfo("コピー完了", "Luaステージデータをクリップボードへコピーしました。")
+
+    def to_lua_string(self) -> str:
+        self.sync_stage_from_ui()
+
+        def lua_value(v) -> str:
+            if v is None:
+                return "nil"
+            if isinstance(v, bool):
+                return "true" if v else "false"
+            if isinstance(v, (int, float)):
+                return str(v)
+            s = str(v).replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{s}"'
+
+        lines: List[str] = []
+        lines.append("-- Auto-generated by pd_mawaru_level_editor.py")
+        lines.append("return {")
+        lines.append(f"    version = {self.stage.version},")
+        lines.append(f"    id = {lua_value(self.stage.stage_id)},")
+        lines.append(f"    name = {lua_value(self.stage.name)},")
+        lines.append(f"    pack = {lua_value(self.stage.pack)},")
+        lines.append("")
+        lines.append("    board = {")
+        lines.append(f"        columns = {self.stage.columns},")
+        lines.append(f"        rows = {self.stage.rows},")
+        lines.append("        cells = {")
+        for row in self.stage.cells:
+            values = ",".join(str(int(v)) for v in row)
+            comment = " ".join(BLOCK_SHORT[int(v)] for v in row)
+            lines.append(f"            {{{values}}}, -- {comment}")
+        lines.append("        },")
+        lines.append("    },")
+        lines.append("")
+        lines.append("    rules = {")
+        lines.append(f"        moveLimit = {lua_value(self.stage.rules.move_limit)},")
+        lines.append(f"        timeLimit = {lua_value(self.stage.rules.time_limit)},")
+        lines.append(f"        manualRiseEnabled = {lua_value(self.stage.rules.manual_rise_enabled)},")
+        lines.append(f"        autoRiseEnabled = {lua_value(self.stage.rules.auto_rise_enabled)},")
+        lines.append(f"        autoRiseInterval = {lua_value(self.stage.rules.auto_rise_interval)},")
+        lines.append("    },")
+        lines.append("")
+        lines.append("    clearCondition = {")
+        lines.append(f"        type = {lua_value(self.stage.clear_condition.type)},")
+        lines.append(f"        count = {lua_value(self.stage.clear_condition.count)},")
+        lines.append(f"        mark = {lua_value(self.stage.clear_condition.mark)},")
+        lines.append("    },")
+
+        if self.stage.rise_queue:
+            lines.append("")
+            lines.append("    riseQueue = {")
+            for row in self.stage.rise_queue:
+                values = ",".join(str(int(v)) for v in row)
+                lines.append(f"        {{{values}}},")
+            lines.append("    },")
+
+        if self.stage.notes:
+            lines.append("")
+            lines.append(f"    notes = {lua_value(self.stage.notes)},")
+
+        lines.append("}")
+        lines.append("")
+        return "\n".join(lines)
+
+
+def main() -> None:
+    if TK_IMPORT_ERROR is not None:
+        print("tkinter を読み込めませんでした。", file=sys.stderr)
+        print("このレベルエディタは Tk 対応の Python が必要です。", file=sys.stderr)
+        print("確認: python3 -m tkinter", file=sys.stderr)
+        print(f"詳細: {TK_IMPORT_ERROR}", file=sys.stderr)
+        sys.exit(1)
+
+    app = LevelEditor()
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()
