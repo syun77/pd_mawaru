@@ -22,7 +22,7 @@ import json
 import random
 import sys
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 try:
     import tkinter as tk
@@ -34,6 +34,18 @@ except ModuleNotFoundError as exc:
     messagebox = None
     ttk = None
     TK_IMPORT_ERROR = exc
+
+if TYPE_CHECKING:
+    import tkinter as tk_types
+    from tkinter import ttk as ttk_types
+
+    TkEvent = tk_types.Event[Any]
+    TkVariable = tk_types.Variable
+    TtkFrame = ttk_types.Frame
+else:
+    TkEvent = Any
+    TkVariable = Any
+    TtkFrame = Any
 
 
 # board.lua の BLOCK と合わせる
@@ -59,12 +71,22 @@ BLOCK_SHORT = {
     PEAK: "A",
 }
 
+CLEAR_CONDITION_LABELS = {
+    "eraseAll": "全消し",
+    "erasePanels": "一定数のパネルを消去",
+    "makeLoops": "指定数のループを作成",
+    "makeWrapLoop": "円環ループを作成",
+    "eraseMarked": "マーク付きパネルを消去",
+}
+
+CLEAR_CONDITION_INTERNAL_VALUES = {label: value for value, label in CLEAR_CONDITION_LABELS.items()}
+
 
 @dataclass
 class StageRules:
     move_limit: Optional[int] = 10
     time_limit: Optional[int] = None
-    manual_rise_enabled: bool = True
+    manual_rise_enabled: bool = False
     auto_rise_enabled: bool = False
     auto_rise_interval: Optional[float] = None
 
@@ -327,6 +349,10 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.show_wrap_columns = tk.BooleanVar(value=True)
         self.erase_coords: Set[Tuple[int, int]] = set()
         self.one_move_candidates: List[Tuple[int, int]] = []
+        self.drag_source_cell: Optional[Tuple[int, int]] = None
+        self.drag_target_cell: Optional[Tuple[int, int]] = None
+        self.drag_started = False
+        self.drag_moved = False
 
         self._build_ui()
         self._bind_keys()
@@ -335,7 +361,33 @@ class LevelEditor(tk.Tk if tk is not None else object):
 
     # ------------------------------------------------------------------ UI
 
+    def _build_menu_bar(self) -> None:
+        menu_bar = tk.Menu(self)
+
+        file_menu = tk.Menu(menu_bar, tearoff=False)
+        file_menu.add_command(label="JSON保存", command=self.save_json)
+        file_menu.add_command(label="JSON読込", command=self.load_json)
+        file_menu.add_separator()
+        file_menu.add_command(label="Luaステージ出力", command=self.export_lua)
+        file_menu.add_command(label="Luaをクリップボードへコピー", command=self.copy_lua_to_clipboard)
+        menu_bar.add_cascade(label="ファイル", menu=file_menu)
+
+        edit_menu = tk.Menu(menu_bar, tearoff=False)
+        edit_menu.add_command(label="全消去", command=self.clear_board)
+        edit_menu.add_command(label="ランダム", command=self.randomize_board)
+        edit_menu.add_separator()
+        edit_menu.add_command(label="左へ回転", command=lambda: self.rotate_columns(-1))
+        edit_menu.add_command(label="右へ回転", command=lambda: self.rotate_columns(1))
+        edit_menu.add_separator()
+        edit_menu.add_command(label="選択列を上へ", command=lambda: self.shift_column(-1))
+        edit_menu.add_command(label="選択列を下へ", command=lambda: self.shift_column(1))
+        menu_bar.add_cascade(label="編集", menu=edit_menu)
+
+        self.config(menu=menu_bar)
+
     def _build_ui(self) -> None:
+        self._build_menu_bar()
+
         root = ttk.Frame(self)
         root.pack(fill=tk.BOTH, expand=True)
 
@@ -344,7 +396,10 @@ class LevelEditor(tk.Tk if tk is not None else object):
 
         self.canvas = tk.Canvas(left, bg="white", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
-        self.canvas.bind("<Button-1>", self.on_left_click)
+        self.canvas.bind("<Motion>", self.on_mouse_move)
+        self.canvas.bind("<ButtonPress-1>", self.on_left_button_press)
+        self.canvas.bind("<B1-Motion>", self.on_left_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_left_button_release)
         self.canvas.bind("<Button-3>", self.on_right_click)
         self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)
 
@@ -361,11 +416,9 @@ class LevelEditor(tk.Tk if tk is not None else object):
 
         self._build_stage_panel(right)
         self._build_brush_panel(right)
-        self._build_edit_panel(right)
-        self._build_file_panel(right)
         self._build_info_panel(right)
 
-    def _build_stage_panel(self, parent: ttk.Frame) -> None:
+    def _build_stage_panel(self, parent: TtkFrame) -> None:
         group = ttk.LabelFrame(parent, text="ステージ設定")
         group.pack(fill=tk.X, pady=4)
 
@@ -375,7 +428,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.var_columns = tk.IntVar(value=self.stage.columns)
         self.var_rows = tk.IntVar(value=self.stage.rows)
         self.var_move_limit = tk.StringVar(value=str(self.stage.rules.move_limit or ""))
-        self.var_clear_type = tk.StringVar(value=self.stage.clear_condition.type)
+        self.var_clear_type = tk.StringVar(value=self.clear_condition_display_value(self.stage.clear_condition.type))
         self.var_clear_count = tk.StringVar(value="" if self.stage.clear_condition.count is None else str(self.stage.clear_condition.count))
         self.var_manual_rise = tk.BooleanVar(value=self.stage.rules.manual_rise_enabled)
         self.var_auto_rise = tk.BooleanVar(value=self.stage.rules.auto_rise_enabled)
@@ -386,87 +439,94 @@ class LevelEditor(tk.Tk if tk is not None else object):
 
         size_row = ttk.Frame(group)
         size_row.pack(fill=tk.X, padx=6, pady=2)
-        ttk.Label(size_row, text="columns", width=10).pack(side=tk.LEFT)
-        ttk.Spinbox(size_row, from_=4, to=24, textvariable=self.var_columns, width=5).pack(side=tk.LEFT)
-        ttk.Label(size_row, text="rows", width=6).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Spinbox(size_row, from_=3, to=12, textvariable=self.var_rows, width=5).pack(side=tk.LEFT)
+        ttk.Label(size_row, text="列 x 行", width=10).pack(side=tk.LEFT)
+        ttk.Spinbox(size_row, from_=4, to=24, textvariable=self.var_columns, width=2).pack(side=tk.LEFT)
+        ttk.Label(size_row, text="x", width=2).pack(side=tk.LEFT, padx=(2, 2))
+        ttk.Spinbox(size_row, from_=3, to=12, textvariable=self.var_rows, width=2).pack(side=tk.LEFT)
         ttk.Button(size_row, text="適用", command=self.apply_resize).pack(side=tk.RIGHT)
 
-        self._labeled_entry(group, "moveLimit", self.var_move_limit)
+        self._labeled_entry(group, "手数制限", self.var_move_limit)
 
         row = ttk.Frame(group)
         row.pack(fill=tk.X, padx=6, pady=2)
-        ttk.Label(row, text="clear", width=10).pack(side=tk.LEFT)
+        ttk.Label(row, text="クリア条件", width=10).pack(side=tk.LEFT)
         clear_combo = ttk.Combobox(
             row,
             textvariable=self.var_clear_type,
             state="readonly",
-            values=["eraseAll", "erasePanels", "makeLoops", "makeWrapLoop", "eraseMarked"],
+            values=list(CLEAR_CONDITION_INTERNAL_VALUES.keys()),
             width=15,
         )
         clear_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self._labeled_entry(group, "clearCount", self.var_clear_count)
-        ttk.Checkbutton(group, text="manualRiseEnabled", variable=self.var_manual_rise).pack(anchor=tk.W, padx=6)
-        ttk.Checkbutton(group, text="autoRiseEnabled", variable=self.var_auto_rise).pack(anchor=tk.W, padx=6)
+        ttk.Checkbutton(group, text="手動せり上げ (Bボタン) が可能かどうか？", variable=self.var_manual_rise).pack(anchor=tk.W, padx=6)
+        ttk.Checkbutton(group, text="一定時間の自動せり上がりを行うか", variable=self.var_auto_rise).pack(anchor=tk.W, padx=6)
 
-    def _build_brush_panel(self, parent: ttk.Frame) -> None:
+    def _build_brush_panel(self, parent: TtkFrame) -> None:
         group = ttk.LabelFrame(parent, text="ブラシ")
         group.pack(fill=tk.X, pady=4)
-
-        for value in [EMPTY, SLASH, BACKSLASH, VALLEY, PEAK]:
-            ttk.Radiobutton(
-                group,
-                text=f"{value}: {BLOCK_NAMES[value]}",
-                value=value,
-                command=self.draw_board,
-                variable=tk.IntVar(value=self.current_block),
-            ).pack(anchor=tk.W)
-
-        # Radiobuttonに個別IntVarを渡すと状態共有されないため、明示的なボタン群にする
-        for child in group.winfo_children():
-            child.destroy()
         self.var_brush = tk.IntVar(value=self.current_block)
         for value in [EMPTY, SLASH, BACKSLASH, VALLEY, PEAK]:
-            ttk.Radiobutton(
-                group,
-                text=f"{value}: {BLOCK_NAMES[value]}",
-                value=value,
-                variable=self.var_brush,
-                command=self.on_brush_changed,
-            ).pack(anchor=tk.W, padx=6)
+            self._build_brush_option(group, value)
 
         ttk.Label(group, text="キー: 0-4 / Spaceでセル切替 / 右クリックで空白").pack(anchor=tk.W, padx=6, pady=(4, 2))
 
-    def _build_edit_panel(self, parent: ttk.Frame) -> None:
-        group = ttk.LabelFrame(parent, text="編集")
-        group.pack(fill=tk.X, pady=4)
-
-        row = ttk.Frame(group)
+    def _build_brush_option(self, parent: TtkFrame, value: int) -> None:
+        row = ttk.Frame(parent)
         row.pack(fill=tk.X, padx=6, pady=2)
-        ttk.Button(row, text="全消去", command=self.clear_board).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
-        ttk.Button(row, text="ランダム", command=self.randomize_board).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
 
-        row = ttk.Frame(group)
-        row.pack(fill=tk.X, padx=6, pady=2)
-        ttk.Button(row, text="左へ回転", command=lambda: self.rotate_columns(-1)).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
-        ttk.Button(row, text="右へ回転", command=lambda: self.rotate_columns(1)).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+        radio = ttk.Radiobutton(
+            row,
+            value=value,
+            variable=self.var_brush,
+            command=self.on_brush_changed,
+        )
+        radio.pack(side=tk.LEFT)
 
-        row = ttk.Frame(group)
-        row.pack(fill=tk.X, padx=6, pady=2)
-        ttk.Button(row, text="選択列↑", command=lambda: self.shift_column(-1)).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
-        ttk.Button(row, text="選択列↓", command=lambda: self.shift_column(1)).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+        preview = tk.Canvas(row, width=36, height=36, bg="white", highlightthickness=1, highlightbackground="#c8c8c8")
+        preview.pack(side=tk.LEFT, padx=(2, 8))
+        self.draw_brush_preview(preview, value)
 
-    def _build_file_panel(self, parent: ttk.Frame) -> None:
-        group = ttk.LabelFrame(parent, text="ファイル")
-        group.pack(fill=tk.X, pady=4)
+        label = ttk.Label(row, text=f"{value}: {BLOCK_NAMES[value]}")
+        label.pack(side=tk.LEFT)
 
-        ttk.Button(group, text="JSON保存", command=self.save_json).pack(fill=tk.X, padx=6, pady=2)
-        ttk.Button(group, text="JSON読込", command=self.load_json).pack(fill=tk.X, padx=6, pady=2)
-        ttk.Button(group, text="Luaステージ出力", command=self.export_lua).pack(fill=tk.X, padx=6, pady=2)
-        ttk.Button(group, text="クリップボードへLuaコピー", command=self.copy_lua_to_clipboard).pack(fill=tk.X, padx=6, pady=2)
+        def select_brush(_: TkEvent | None = None, *, selected_value: int = value) -> None:
+            self.var_brush.set(selected_value)
+            self.on_brush_changed()
 
-    def _build_info_panel(self, parent: ttk.Frame) -> None:
+        preview.bind("<Button-1>", select_brush)
+        label.bind("<Button-1>", select_brush)
+
+    def draw_brush_preview(self, canvas: Any, block: int) -> None:
+        canvas.delete("all")
+
+        left = 7
+        right = 29
+        top = 7
+        bottom = 29
+        mid_x = (left + right) / 2
+        line_width = 3
+        line_fill = "#222222"
+
+        if block == EMPTY:
+            canvas.create_rectangle(left, top, right, bottom, outline="#d8d8d8")
+            return
+
+        if block == SLASH:
+            canvas.create_line(left, bottom, right, top, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+        elif block == BACKSLASH:
+            canvas.create_line(left, top, right, bottom, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+        elif block == VALLEY:
+            apex_y = top + (bottom - top) * 0.65
+            canvas.create_line(left, top, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+            canvas.create_line(right, top, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+        elif block == PEAK:
+            apex_y = top + (bottom - top) * 0.35
+            canvas.create_line(left, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+            canvas.create_line(right, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+
+    def _build_info_panel(self, parent: TtkFrame) -> None:
         group = ttk.LabelFrame(parent, text="解析情報")
         group.pack(fill=tk.BOTH, expand=True, pady=4)
 
@@ -475,11 +535,19 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.info_text.configure(state=tk.DISABLED)
 
     @staticmethod
-    def _labeled_entry(parent: ttk.Frame, label: str, variable: tk.Variable) -> None:
+    def _labeled_entry(parent: TtkFrame, label: str, variable: TkVariable) -> None:
         row = ttk.Frame(parent)
         row.pack(fill=tk.X, padx=6, pady=2)
         ttk.Label(row, text=label, width=10).pack(side=tk.LEFT)
         ttk.Entry(row, textvariable=variable).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    @staticmethod
+    def clear_condition_display_value(internal_value: str) -> str:
+        return CLEAR_CONDITION_LABELS.get(internal_value, internal_value)
+
+    @staticmethod
+    def clear_condition_internal_value(display_value: str) -> str:
+        return CLEAR_CONDITION_INTERNAL_VALUES.get(display_value, display_value)
 
     def _bind_keys(self) -> None:
         self.bind("<Left>", lambda e: self.move_selection(-1, 0))
@@ -631,21 +699,97 @@ class LevelEditor(tk.Tk if tk is not None else object):
             return None
         return col, row
 
-    def on_left_click(self, event: tk.Event) -> None:
+    def update_selected_cell(self, cell: Tuple[int, int]) -> bool:
+        col, row = cell
+        if self.selected_col == col and self.selected_row == row:
+            return False
+        self.selected_col, self.selected_row = cell
+        self.draw_board()
+        return True
+
+    def on_mouse_move(self, event: TkEvent) -> None:
         cell = self.canvas_to_cell(event.x, event.y)
         if cell is None:
             return
-        self.selected_col, self.selected_row = cell
-        self.set_selected_cell(self.current_block)
+        self.update_selected_cell(cell)
 
-    def on_right_click(self, event: tk.Event) -> None:
+    def on_left_button_press(self, event: TkEvent) -> None:
+        cell = self.canvas_to_cell(event.x, event.y)
+        if cell is None:
+            self.clear_drag_state()
+            return
+
+        self.selected_col, self.selected_row = cell
+        self.drag_source_cell = cell
+        self.drag_target_cell = cell
+        self.drag_started = False
+        self.drag_moved = False
+        self.draw_board()
+
+    def on_left_drag(self, event: TkEvent) -> None:
+        cell = self.canvas_to_cell(event.x, event.y)
+        if cell is None:
+            return
+
+        self.drag_target_cell = cell
+        if self.drag_source_cell is not None and cell != self.drag_source_cell:
+            self.drag_moved = True
+            source_col, source_row = self.drag_source_cell
+            if self.stage.cells[source_row - 1][source_col - 1] != EMPTY:
+                self.drag_started = True
+        self.update_selected_cell(cell)
+
+    def on_left_button_release(self, event: TkEvent) -> None:
+        cell = self.canvas_to_cell(event.x, event.y)
+        if cell is None:
+            cell = self.drag_target_cell
+
+        source = self.drag_source_cell
+        target = cell
+        was_dragging = self.drag_started and source is not None and target is not None and source != target
+
+        if target is not None:
+            self.selected_col, self.selected_row = target
+
+        if was_dragging:
+            self.move_cell_contents(source, target)
+        elif target is not None and not self.drag_moved:
+            self.cycle_selected_cell()
+        elif target is not None:
+            self.set_selected_cell(self.current_block)
+
+        self.clear_drag_state()
+
+    def clear_drag_state(self) -> None:
+        self.drag_source_cell = None
+        self.drag_target_cell = None
+        self.drag_started = False
+        self.drag_moved = False
+
+    def move_cell_contents(self, source: Tuple[int, int], target: Tuple[int, int]) -> None:
+        source_col, source_row = source
+        target_col, target_row = target
+        if source == target:
+            return
+
+        source_value = self.stage.cells[source_row - 1][source_col - 1]
+        target_value = self.stage.cells[target_row - 1][target_col - 1]
+        if source_value == EMPTY:
+            return
+
+        self.stage.cells[target_row - 1][target_col - 1] = source_value
+        self.stage.cells[source_row - 1][source_col - 1] = target_value if target_value != EMPTY else EMPTY
+        self.one_move_candidates = []
+        self.refresh_and_draw()
+
+    def on_right_click(self, event: TkEvent) -> None:
         cell = self.canvas_to_cell(event.x, event.y)
         if cell is None:
             return
         self.selected_col, self.selected_row = cell
         self.set_selected_cell(EMPTY)
 
-    def on_mouse_wheel(self, event: tk.Event) -> None:
+    def on_mouse_wheel(self, event: TkEvent) -> None:
         cell = self.canvas_to_cell(event.x, event.y)
         if cell is None:
             return
@@ -675,7 +819,10 @@ class LevelEditor(tk.Tk if tk is not None else object):
 
     def cycle_selected_cell(self) -> None:
         current = self.stage.cells[self.selected_row - 1][self.selected_col - 1]
-        self.set_selected_cell((current + 1) % 5)
+        next_value = (current + 1) % 5
+        self.current_block = next_value
+        self.var_brush.set(next_value)
+        self.set_selected_cell(next_value)
 
     # ------------------------------------------------------------------ Editing
 
@@ -807,7 +954,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.stage.rules.move_limit = int(move_limit_text) if move_limit_text else None
 
         clear_count_text = self.var_clear_count.get().strip()
-        self.stage.clear_condition.type = self.var_clear_type.get().strip() or "eraseAll"
+        self.stage.clear_condition.type = self.clear_condition_internal_value(self.var_clear_type.get().strip() or "全消し")
         self.stage.clear_condition.count = int(clear_count_text) if clear_count_text else None
 
     def sync_ui_from_stage(self) -> None:
@@ -817,7 +964,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.var_columns.set(self.stage.columns)
         self.var_rows.set(self.stage.rows)
         self.var_move_limit.set("" if self.stage.rules.move_limit is None else str(self.stage.rules.move_limit))
-        self.var_clear_type.set(self.stage.clear_condition.type)
+        self.var_clear_type.set(self.clear_condition_display_value(self.stage.clear_condition.type))
         self.var_clear_count.set("" if self.stage.clear_condition.count is None else str(self.stage.clear_condition.count))
         self.var_manual_rise.set(self.stage.rules.manual_rise_enabled)
         self.var_auto_rise.set(self.stage.rules.auto_rise_enabled)
