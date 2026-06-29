@@ -779,7 +779,12 @@ class LevelEditor(tk.Tk if tk is not None else object):
             json.dump(data, f, ensure_ascii=False, indent=2)
 
         normalized = os.path.abspath(path)
+        # 最後に編集したファイルパスに設定.
         self.last_saved_path = normalized
+        # ファイル名のみを取り出す.
+        base_name = os.path.basename(normalized)
+        # タイトルバーにファイル名を表示.
+        self.title(f"Level Editor - {base_name}")
         self.app_config["last_opened_file"] = normalized
         self.append_history("saved", normalized)
         self.save_app_config()
@@ -796,7 +801,12 @@ class LevelEditor(tk.Tk if tk is not None else object):
             return False
 
         normalized = os.path.abspath(path)
+        # 最後に編集したファイルパスに設定.
         self.last_saved_path = normalized
+        # ファイル名のみを取り出す.
+        base_name = os.path.basename(normalized)
+        # タイトルバーにファイル名を表示.
+        self.title(f"Level Editor - {base_name}")
         self.app_config["last_opened_file"] = normalized
         if record_history:
             self.append_history("opened", normalized)
@@ -1019,7 +1029,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.bind("3", lambda e: self.set_brush_and_cell(VALLEY))
         self.bind("4", lambda e: self.set_brush_and_cell(PEAK))
         self.bind("<Command-s>", lambda e: self.save_json_overwrite())
-        self.bind("<Command-l>", lambda e: self.load_json())
+        self.bind("<Command-o>", lambda e: self.load_json())
         self.bind("<Command-e>", lambda e: self.export_lua())
         self.bind("<F5>", lambda e: self.open_test_play_mode())
 
