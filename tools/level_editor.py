@@ -18,6 +18,7 @@ Python 3.10+ 推奨。標準ライブラリのみ使用します。
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import random
@@ -477,7 +478,7 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
         self.is_erasing = True
         self.erase_targets = targets
         self.erase_blink_visible = True
-        self.erase_blink_ticks_left = 6
+        self.erase_blink_ticks_left = 8
         self.draw_board()
         self.step_erase_blink()
 
@@ -603,6 +604,9 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.last_saved_path = None  # 最後に保存したファイルパスを保持する変数
         self.config_path = os.path.join(os.path.dirname(__file__), ".level_editor_config.json")
         self.app_config: Dict[str, Any] = self.default_app_config()
+        self.undo_stack: List[Dict[str, Any]] = []
+        self.redo_stack: List[Dict[str, Any]] = []
+        self.max_undo_steps = 100
 
         self._build_ui()
         self._bind_keys()
@@ -885,6 +889,13 @@ class LevelEditor(tk.Tk if tk is not None else object):
         left = ttk.Frame(root)
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
+        toolbar = ttk.Frame(left)
+        toolbar.pack(fill=tk.X, padx=8, pady=(8, 2))
+        self.undo_button = ttk.Button(toolbar, text="Undo", command=self.on_undo_button_click, takefocus=False)
+        self.undo_button.pack(side=tk.LEFT, padx=2)
+        self.redo_button = ttk.Button(toolbar, text="Redo", command=self.on_redo_button_click, takefocus=False)
+        self.redo_button.pack(side=tk.LEFT, padx=2)
+
         self.canvas = tk.Canvas(left, bg="white", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.canvas.bind("<Motion>", self.on_mouse_move)
@@ -893,6 +904,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.canvas.bind("<ButtonRelease-1>", self.on_left_button_release)
         self.canvas.bind("<Button-3>", self.on_right_click)
         self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)
+        self.canvas.focus_set()
 
         bottom = ttk.Frame(left)
         bottom.pack(fill=tk.X, padx=8, pady=6)
@@ -909,6 +921,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self._build_stage_panel(right)
         self._build_brush_panel(right)
         self._build_info_panel(right)
+        self.update_undo_redo_buttons()
 
     def _build_stage_panel(self, parent: TtkFrame) -> None:
         group = ttk.LabelFrame(parent, text="ステージ設定")
@@ -1046,7 +1059,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.bind("<Right>", lambda e: self.move_selection(1, 0))
         self.bind("<Up>", lambda e: self.move_selection(0, -1))
         self.bind("<Down>", lambda e: self.move_selection(0, 1))
-        self.bind("<space>", lambda e: self.cycle_selected_cell())
+        self.bind_all("<space>", self.on_global_space, add="+")
         self.bind("<Delete>", lambda e: self.set_selected_cell(BlockType.EMPTY))
         self.bind("0", lambda e: self.set_brush_and_cell(BlockType.EMPTY))
         self.bind("1", lambda e: self.set_brush_and_cell(BlockType.SLASH))
@@ -1057,6 +1070,124 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.bind("<Command-o>", lambda e: self.load_json())
         self.bind("<Command-e>", lambda e: self.export_lua())
         self.bind("<F5>", lambda e: self.open_test_play_mode())
+        self.bind_all("<Command-z>", self.on_global_undo, add="+")
+        self.bind_all("<Command-y>", self.on_global_redo, add="+")
+        self.bind_all("<Command-Shift-z>", self.on_global_redo, add="+")
+
+    def _is_editable_widget(self, widget: Any) -> bool:
+        if widget is None:
+            return False
+
+        try:
+            widget_class = widget.winfo_class()
+        except Exception:
+            return False
+
+        return widget_class in {"Entry", "TEntry", "Spinbox", "TSpinbox", "Text", "TCombobox"}
+
+    def on_global_space(self, event: TkEvent) -> str | None:
+        if self._is_editable_widget(getattr(event, "widget", None)):
+            return None
+
+        self.cycle_selected_cell()
+        self.focus_editor_canvas()
+        return "break"
+
+    def on_global_undo(self, event: TkEvent) -> str | None:
+        if self.focus_get() is not None:
+            try:
+                if self.focus_get().winfo_toplevel() is not self:
+                    return None
+            except Exception:
+                return None
+
+        self.undo()
+        self.focus_editor_canvas()
+        return "break"
+
+    def on_global_redo(self, event: TkEvent) -> str | None:
+        if self.focus_get() is not None:
+            try:
+                if self.focus_get().winfo_toplevel() is not self:
+                    return None
+            except Exception:
+                return None
+
+        self.redo()
+        self.focus_editor_canvas()
+        return "break"
+
+    def capture_editor_snapshot(self) -> Dict[str, Any]:
+        self.sync_stage_from_ui()
+        return {
+            "stage": copy.deepcopy(self.to_json_dict()),
+            "selected_col": self.selected_col,
+            "selected_row": self.selected_row,
+            "current_block": int(self.current_block),
+            "show_erase_preview": bool(self.show_erase_preview.get()),
+            "show_wrap_columns": bool(self.show_wrap_columns.get()),
+        }
+
+    def restore_editor_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        stage_data = snapshot.get("stage")
+        if isinstance(stage_data, dict):
+            self.load_from_json_dict(stage_data, clear_history=False)
+
+        self.selected_col = max(1, min(self.stage.columns, int(snapshot.get("selected_col", self.selected_col))))
+        self.selected_row = max(1, min(self.stage.rows, int(snapshot.get("selected_row", self.selected_row))))
+        self.current_block = int(snapshot.get("current_block", self.current_block))
+        if self.current_block < BlockType.EMPTY or self.current_block > BlockType.PEAK:
+            self.current_block = BlockType.SLASH
+        self.var_brush.set(self.current_block)
+        self.show_erase_preview.set(bool(snapshot.get("show_erase_preview", self.show_erase_preview.get())))
+        self.show_wrap_columns.set(bool(snapshot.get("show_wrap_columns", self.show_wrap_columns.get())))
+        self.refresh_and_draw()
+
+    def push_undo_state(self) -> None:
+        self.undo_stack.append(self.capture_editor_snapshot())
+        if len(self.undo_stack) > self.max_undo_steps:
+            self.undo_stack = self.undo_stack[-self.max_undo_steps :]
+        self.redo_stack.clear()
+        self.update_undo_redo_buttons()
+
+    def clear_undo_redo_history(self) -> None:
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.update_undo_redo_buttons()
+
+    def update_undo_redo_buttons(self) -> None:
+        if hasattr(self, "undo_button"):
+            self.undo_button.configure(state=(tk.NORMAL if self.undo_stack else tk.DISABLED))
+        if hasattr(self, "redo_button"):
+            self.redo_button.configure(state=(tk.NORMAL if self.redo_stack else tk.DISABLED))
+
+    def focus_editor_canvas(self) -> None:
+        if hasattr(self, "canvas"):
+            self.canvas.focus_set()
+
+    def on_undo_button_click(self) -> None:
+        self.undo()
+        self.focus_editor_canvas()
+
+    def on_redo_button_click(self) -> None:
+        self.redo()
+        self.focus_editor_canvas()
+
+    def undo(self) -> None:
+        if not self.undo_stack:
+            return
+        self.redo_stack.append(self.capture_editor_snapshot())
+        snapshot = self.undo_stack.pop()
+        self.restore_editor_snapshot(snapshot)
+        self.update_undo_redo_buttons()
+
+    def redo(self) -> None:
+        if not self.redo_stack:
+            return
+        self.undo_stack.append(self.capture_editor_snapshot())
+        snapshot = self.redo_stack.pop()
+        self.restore_editor_snapshot(snapshot)
+        self.update_undo_redo_buttons()
 
     # ------------------------------------------------------------------ Drawing
 
@@ -1207,6 +1338,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.update_selected_cell(cell)
 
     def on_left_button_press(self, event: TkEvent) -> None:
+        self.focus_editor_canvas()
         cell = self.canvas_to_cell(event.x, event.y)
         if cell is None:
             self.clear_drag_state()
@@ -1234,6 +1366,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
 
 	# マウスReleaseイベント.
     def on_left_button_release(self, event: TkEvent) -> None:
+        self.focus_editor_canvas()
         cell = self.canvas_to_cell(event.x, event.y)
         if cell is None:
             # ドラッグ中にキャンバス外で離した場合は、選択セルを元に戻す
@@ -1274,12 +1407,15 @@ class LevelEditor(tk.Tk if tk is not None else object):
         if source_value == BlockType.EMPTY:
             return
 
+        self.push_undo_state()
+
         self.stage.cells[target_row - 1][target_col - 1] = source_value
         self.stage.cells[source_row - 1][source_col - 1] = target_value if target_value != BlockType.EMPTY else BlockType.EMPTY
         self.one_move_candidates = []
         self.refresh_and_draw()
 
     def on_right_click(self, event: TkEvent) -> None:
+        self.focus_editor_canvas()
         cell = self.canvas_to_cell(event.x, event.y)
         if cell is None:
             return
@@ -1287,6 +1423,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.set_selected_cell(BlockType.EMPTY)
 
     def on_mouse_wheel(self, event: TkEvent) -> None:
+        self.focus_editor_canvas()
         cell = self.canvas_to_cell(event.x, event.y)
         if cell is None:
             return
@@ -1310,6 +1447,9 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.set_selected_cell(value)
 
     def set_selected_cell(self, value: int) -> None:
+        if self.stage.cells[self.selected_row - 1][self.selected_col - 1] == value:
+            return
+        self.push_undo_state()
         self.stage.cells[self.selected_row - 1][self.selected_col - 1] = value
         self.one_move_candidates = []
         self.refresh_and_draw()
@@ -1335,6 +1475,8 @@ class LevelEditor(tk.Tk if tk is not None else object):
             messagebox.showerror("エラー", "columns は4〜24、rows は3〜12の範囲にしてください。")
             return
 
+        self.push_undo_state()
+
         self.stage.columns = columns
         self.stage.rows = rows
         self.stage.ensure_cells()
@@ -1343,11 +1485,13 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.refresh_and_draw()
 
     def clear_board(self) -> None:
+        self.push_undo_state()
         self.stage.cells = [[BlockType.EMPTY for _ in range(self.stage.columns)] for _ in range(self.stage.rows)]
         self.one_move_candidates = []
         self.refresh_and_draw()
 
     def randomize_board(self) -> None:
+        self.push_undo_state()
         for r in range(self.stage.rows):
             for c in range(self.stage.columns):
                 self.stage.cells[r][c] = random.choice([BlockType.SLASH, BlockType.BACKSLASH, BlockType.VALLEY, BlockType.PEAK])
@@ -1356,6 +1500,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
 
     def rotate_columns(self, direction: int) -> None:
         # direction = 1: 右へ、-1: 左へ
+        self.push_undo_state()
         for r in range(self.stage.rows):
             row = self.stage.cells[r]
             if direction > 0:
@@ -1366,6 +1511,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.refresh_and_draw()
 
     def shift_column(self, direction: int) -> None:
+        self.push_undo_state()
         col = self.selected_col - 1
         values = [self.stage.cells[r][col] for r in range(self.stage.rows)]
         if direction > 0:
@@ -1500,7 +1646,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
             "notes": self.stage.notes,
         }
 
-    def load_from_json_dict(self, data: dict) -> None:
+    def load_from_json_dict(self, data: dict, clear_history: bool = True) -> None:
         board = data.get("board", {})
         rules = data.get("rules", {})
         clear = data.get("clearCondition", {})
@@ -1534,6 +1680,8 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.sync_ui_from_stage()
         self.one_move_candidates = []
         self.refresh_and_draw()
+        if clear_history:
+            self.clear_undo_redo_history()
 
     # ------------------------------------------------------------------ File I/O
 	# 名前をつけて保存.
