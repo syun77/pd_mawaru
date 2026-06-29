@@ -118,6 +118,8 @@ class StageData:
     pack: str = "tutorial"
     columns: int = 10 # 列数.
     rows: int = 6 # 行数.
+    initial_cursor_col: int = 1 # 初期カーソル列(1始まり).
+    initial_cursor_row: int = 2 # 初期カーソル行(1始まり). テストプレイでは2以上.
     cells: List[List[int]] = field(default_factory=list)
     rules: StageRules = field(default_factory=StageRules)
     clear_condition: ClearCondition = field(default_factory=ClearCondition)
@@ -136,6 +138,9 @@ class StageData:
                 v = int(self.cells[r][c])
                 new_cells[r][c] = v if BlockType.EMPTY <= v <= BlockType.PEAK else BlockType.EMPTY
         self.cells = new_cells
+
+        self.initial_cursor_col = max(1, min(self.columns, int(self.initial_cursor_col)))
+        self.initial_cursor_row = max(2, min(self.rows, int(self.initial_cursor_row)))
 
 
 class BoardLogic:
@@ -631,8 +636,10 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.current_block = BlockType.SLASH
         self.show_erase_preview = tk.BooleanVar(value=True)
         self.show_wrap_columns = tk.BooleanVar(value=True)
+        self.brush_preview_size = 36
         self.erase_coords: Set[Tuple[int, int]] = set()
         self.one_move_candidates: List[Tuple[int, int]] = []
+        self.brush_preview_canvases: List[Tuple[Any, int]] = []
         self.drag_source_cell: Optional[Tuple[int, int]] = None
         self.drag_target_cell: Optional[Tuple[int, int]] = None
         self.drag_started = False
@@ -683,6 +690,8 @@ class LevelEditor(tk.Tk if tk is not None else object):
             "pack": self.var_pack.get().strip() or self.stage.pack,
             "columns": int(self.var_columns.get()),
             "rows": int(self.var_rows.get()),
+            "initial_cursor_col": int(self.var_initial_cursor_col.get()),
+            "initial_cursor_row": int(self.var_initial_cursor_row.get()),
             "move_limit": self._parse_optional_int(self.var_move_limit.get()),
             "clear_type": self.clear_condition_internal_value(self.var_clear_type.get().strip() or "全消し"),
             "clear_count": self._parse_optional_int(self.var_clear_count.get()),
@@ -690,6 +699,8 @@ class LevelEditor(tk.Tk if tk is not None else object):
             "auto_rise_enabled": bool(self.var_auto_rise.get()),
             "show_erase_preview": bool(self.show_erase_preview.get()),
             "show_wrap_columns": bool(self.show_wrap_columns.get()),
+            "stage_panel_expanded": bool(self.var_stage_panel_expanded.get()),
+            "brush_preview_size": int(self.brush_preview_size),
             "selected_col": int(self.selected_col),
             "selected_row": int(self.selected_row),
             "current_block": int(self.current_block),
@@ -706,6 +717,8 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.stage.pack = str(settings.get("pack", self.stage.pack))
         self.stage.columns = max(4, min(24, int(settings.get("columns", self.stage.columns))))
         self.stage.rows = max(3, min(12, int(settings.get("rows", self.stage.rows))))
+        self.stage.initial_cursor_col = max(1, min(self.stage.columns, int(settings.get("initial_cursor_col", self.stage.initial_cursor_col))))
+        self.stage.initial_cursor_row = max(2, min(self.stage.rows, int(settings.get("initial_cursor_row", self.stage.initial_cursor_row))))
         self.stage.rules.move_limit = settings.get("move_limit", self.stage.rules.move_limit)
         self.stage.clear_condition.type = str(settings.get("clear_type", self.stage.clear_condition.type))
         self.stage.clear_condition.count = settings.get("clear_count", self.stage.clear_condition.count)
@@ -716,6 +729,13 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.sync_ui_from_stage()
         self.show_erase_preview.set(bool(settings.get("show_erase_preview", self.show_erase_preview.get())))
         self.show_wrap_columns.set(bool(settings.get("show_wrap_columns", self.show_wrap_columns.get())))
+        self.var_stage_panel_expanded.set(bool(settings.get("stage_panel_expanded", self.var_stage_panel_expanded.get())))
+
+        loaded_brush_preview_size = int(settings.get("brush_preview_size", self.brush_preview_size))
+        self.brush_preview_size = max(24, min(96, loaded_brush_preview_size))
+        self.var_brush_preview_size.set(self.brush_preview_size)
+        self.update_stage_panel_visibility()
+        self.update_brush_preview_sizes()
 
         self.current_block = int(settings.get("current_block", self.current_block))
         if self.current_block < BlockType.EMPTY or self.current_block > BlockType.PEAK:
@@ -960,14 +980,23 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.update_undo_redo_buttons()
 
     def _build_stage_panel(self, parent: TtkFrame) -> None:
-        group = ttk.LabelFrame(parent, text="ステージ設定")
-        group.pack(fill=tk.X, pady=4)
+        container = ttk.Frame(parent)
+        container.pack(fill=tk.X, pady=4)
+
+        self.var_stage_panel_expanded = tk.BooleanVar(value=True)
+        self.stage_panel_toggle = ttk.Button(container, text="", command=self.toggle_stage_panel)
+        self.stage_panel_toggle.pack(fill=tk.X)
+
+        group = ttk.LabelFrame(container, text="ステージ設定")
+        self.stage_panel_body = group
 
         self.var_stage_id = tk.StringVar(value=self.stage.stage_id)
         self.var_name = tk.StringVar(value=self.stage.name)
         self.var_pack = tk.StringVar(value=self.stage.pack)
         self.var_columns = tk.IntVar(value=self.stage.columns)
         self.var_rows = tk.IntVar(value=self.stage.rows)
+        self.var_initial_cursor_col = tk.IntVar(value=self.stage.initial_cursor_col)
+        self.var_initial_cursor_row = tk.IntVar(value=self.stage.initial_cursor_row)
         self.var_move_limit = tk.StringVar(value=str(self.stage.rules.move_limit or ""))
         self.var_clear_type = tk.StringVar(value=self.clear_condition_display_value(self.stage.clear_condition.type))
         self.var_clear_count = tk.StringVar(value="" if self.stage.clear_condition.count is None else str(self.stage.clear_condition.count))
@@ -986,6 +1015,13 @@ class LevelEditor(tk.Tk if tk is not None else object):
         ttk.Spinbox(size_row, from_=3, to=12, textvariable=self.var_rows, width=2).pack(side=tk.LEFT)
         ttk.Button(size_row, text="適用", command=self.apply_resize).pack(side=tk.RIGHT)
 
+        cursor_row = ttk.Frame(group)
+        cursor_row.pack(fill=tk.X, padx=6, pady=2)
+        ttk.Label(cursor_row, text="初期カーソル", width=10).pack(side=tk.LEFT)
+        ttk.Spinbox(cursor_row, from_=1, to=24, textvariable=self.var_initial_cursor_col, width=2).pack(side=tk.LEFT)
+        ttk.Label(cursor_row, text="x", width=2).pack(side=tk.LEFT, padx=(2, 2))
+        ttk.Spinbox(cursor_row, from_=2, to=12, textvariable=self.var_initial_cursor_row, width=2).pack(side=tk.LEFT)
+
         self._labeled_entry(group, "手数制限", self.var_move_limit)
 
         row = ttk.Frame(group)
@@ -1003,11 +1039,20 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self._labeled_entry(group, "clearCount", self.var_clear_count)
         ttk.Checkbutton(group, text="手動せり上げ (Bボタン) が可能かどうか？", variable=self.var_manual_rise).pack(anchor=tk.W, padx=6)
         ttk.Checkbutton(group, text="一定時間の自動せり上がりを行うか", variable=self.var_auto_rise).pack(anchor=tk.W, padx=6)
+        self.update_stage_panel_visibility()
 
     def _build_brush_panel(self, parent: TtkFrame) -> None:
         group = ttk.LabelFrame(parent, text="ブラシ")
         group.pack(fill=tk.X, pady=4)
         self.var_brush = tk.IntVar(value=self.current_block)
+        self.var_brush_preview_size = tk.IntVar(value=self.brush_preview_size)
+
+        size_row = ttk.Frame(group)
+        size_row.pack(fill=tk.X, padx=6, pady=(4, 2))
+        ttk.Label(size_row, text="プレビューサイズ", width=12).pack(side=tk.LEFT)
+        ttk.Spinbox(size_row, from_=24, to=96, textvariable=self.var_brush_preview_size, width=4).pack(side=tk.LEFT)
+        ttk.Button(size_row, text="適用", command=self.apply_brush_ui_size).pack(side=tk.LEFT, padx=(6, 0))
+
         for value in [BlockType.EMPTY, BlockType.SLASH, BlockType.BACKSLASH, BlockType.VALLEY, BlockType.PEAK]:
             self._build_brush_option(group, value)
 
@@ -1025,8 +1070,16 @@ class LevelEditor(tk.Tk if tk is not None else object):
         )
         radio.pack(side=tk.LEFT)
 
-        preview = tk.Canvas(row, width=36, height=36, bg="white", highlightthickness=1, highlightbackground="#c8c8c8")
+        preview = tk.Canvas(
+            row,
+            width=self.brush_preview_size,
+            height=self.brush_preview_size,
+            bg="white",
+            highlightthickness=1,
+            highlightbackground="#c8c8c8",
+        )
         preview.pack(side=tk.LEFT, padx=(2, 8))
+        self.brush_preview_canvases.append((preview, value))
         self.draw_brush_preview(preview, value)
 
         label = ttk.Label(row, text=f"{value}: {BLOCK_NAMES[value]}")
@@ -1042,12 +1095,16 @@ class LevelEditor(tk.Tk if tk is not None else object):
     def draw_brush_preview(self, canvas: Any, block: int) -> None:
         canvas.delete("all")
 
-        left = 7
-        right = 29
-        top = 7
-        bottom = 29
+        width = int(canvas.cget("width"))
+        height = int(canvas.cget("height"))
+        pad = max(5, min(width, height) // 5)
+
+        left = pad
+        right = width - pad
+        top = pad
+        bottom = height - pad
         mid_x = (left + right) / 2
-        line_width = 3
+        line_width = max(2, min(width, height) // 12)
         line_fill = "#222222"
 
         if block == BlockType.EMPTY:
@@ -1066,6 +1123,43 @@ class LevelEditor(tk.Tk if tk is not None else object):
             apex_y = top + (bottom - top) * 0.35
             canvas.create_line(left, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
             canvas.create_line(right, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+
+    def toggle_stage_panel(self) -> None:
+        self.var_stage_panel_expanded.set(not self.var_stage_panel_expanded.get())
+        self.update_stage_panel_visibility()
+
+    def update_stage_panel_visibility(self) -> None:
+        expanded = bool(self.var_stage_panel_expanded.get())
+        if hasattr(self, "stage_panel_toggle"):
+            self.stage_panel_toggle.configure(text=("▼ ステージ設定" if expanded else "▶ ステージ設定"))
+
+        if not hasattr(self, "stage_panel_body"):
+            return
+
+        if expanded:
+            if not self.stage_panel_body.winfo_ismapped():
+                self.stage_panel_body.pack(fill=tk.X, pady=(4, 0))
+        elif self.stage_panel_body.winfo_ismapped():
+            self.stage_panel_body.pack_forget()
+
+    def apply_brush_ui_size(self) -> None:
+        try:
+            new_size = int(self.var_brush_preview_size.get())
+        except Exception:
+            messagebox.showerror("エラー", "プレビューサイズは整数で指定してください。")
+            return
+
+        if not 24 <= new_size <= 96:
+            messagebox.showerror("エラー", "プレビューサイズは24〜96の範囲にしてください。")
+            return
+
+        self.brush_preview_size = new_size
+        self.update_brush_preview_sizes()
+
+    def update_brush_preview_sizes(self) -> None:
+        for preview, value in self.brush_preview_canvases:
+            preview.configure(width=self.brush_preview_size, height=self.brush_preview_size)
+            self.draw_brush_preview(preview, value)
 
     def _build_info_panel(self, parent: TtkFrame) -> None:
         group = ttk.LabelFrame(parent, text="解析情報")
@@ -1546,6 +1640,9 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.stage.columns = columns
         self.stage.rows = rows
         self.stage.ensure_cells()
+        self.var_initial_cursor_col.set(max(1, min(columns, int(self.var_initial_cursor_col.get()))))
+        self.var_initial_cursor_row.set(max(2, min(rows, int(self.var_initial_cursor_row.get()))))
+        self.sync_stage_from_ui()
         self.selected_col = min(self.selected_col, columns)
         self.selected_row = min(self.selected_row, rows)
         self.refresh_and_draw()
@@ -1653,8 +1750,8 @@ class LevelEditor(tk.Tk if tk is not None else object):
     # ------------------------------------------------------------------ Test play
 
     def open_test_play_mode(self) -> None:
-        start_row = max(2, self.selected_row)
-        TestPlayWindow(self, self.stage, self.selected_col, start_row)
+        self.sync_stage_from_ui()
+        TestPlayWindow(self, self.stage, self.stage.initial_cursor_col, self.stage.initial_cursor_row)
 
     # ------------------------------------------------------------------ Stage conversion
 
@@ -1662,6 +1759,8 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.stage.stage_id = self.var_stage_id.get().strip() or "stage_001"
         self.stage.name = self.var_name.get().strip() or self.stage.stage_id
         self.stage.pack = self.var_pack.get().strip() or "default"
+        self.stage.initial_cursor_col = max(1, min(self.stage.columns, int(self.var_initial_cursor_col.get())))
+        self.stage.initial_cursor_row = max(2, min(self.stage.rows, int(self.var_initial_cursor_row.get())))
         self.stage.rules.manual_rise_enabled = bool(self.var_manual_rise.get())
         self.stage.rules.auto_rise_enabled = bool(self.var_auto_rise.get())
 
@@ -1678,6 +1777,8 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.var_pack.set(self.stage.pack)
         self.var_columns.set(self.stage.columns)
         self.var_rows.set(self.stage.rows)
+        self.var_initial_cursor_col.set(self.stage.initial_cursor_col)
+        self.var_initial_cursor_row.set(self.stage.initial_cursor_row)
         self.var_move_limit.set("" if self.stage.rules.move_limit is None else str(self.stage.rules.move_limit))
         self.var_clear_type.set(self.clear_condition_display_value(self.stage.clear_condition.type))
         self.var_clear_count.set("" if self.stage.clear_condition.count is None else str(self.stage.clear_condition.count))
@@ -1695,6 +1796,10 @@ class LevelEditor(tk.Tk if tk is not None else object):
                 "columns": self.stage.columns,
                 "rows": self.stage.rows,
                 "cells": self.stage.cells,
+            },
+            "cursorStart": {
+                "col": self.stage.initial_cursor_col,
+                "row": self.stage.initial_cursor_row,
             },
             "rules": {
                 "moveLimit": self.stage.rules.move_limit,
@@ -1714,6 +1819,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
 
     def load_from_json_dict(self, data: dict, clear_history: bool = True) -> None:
         board = data.get("board", {})
+        cursor_start = data.get("cursorStart", {})
         rules = data.get("rules", {})
         clear = data.get("clearCondition", {})
 
@@ -1724,6 +1830,8 @@ class LevelEditor(tk.Tk if tk is not None else object):
             pack=str(data.get("pack", "tutorial")),
             columns=int(board.get("columns", 10)),
             rows=int(board.get("rows", 6)),
+            initial_cursor_col=int(cursor_start.get("col", 1)),
+            initial_cursor_row=int(cursor_start.get("row", 2)),
             cells=board.get("cells", []),
             rules=StageRules(
                 move_limit=rules.get("moveLimit", 10),
@@ -1833,6 +1941,11 @@ class LevelEditor(tk.Tk if tk is not None else object):
             comment = " ".join(BLOCK_SHORT[int(v)] for v in row)
             lines.append(f"            {{{values}}}, -- {comment}")
         lines.append("        },")
+        lines.append("    },")
+        lines.append("")
+        lines.append("    cursorStart = {")
+        lines.append(f"        col = {self.stage.initial_cursor_col},")
+        lines.append(f"        row = {self.stage.initial_cursor_row},")
         lines.append("    },")
         lines.append("")
         lines.append("    rules = {")
