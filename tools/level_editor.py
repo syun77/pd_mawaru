@@ -572,7 +572,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.bind("4", lambda e: self.set_brush_and_cell(PEAK))
         self.bind("<Command-s>", lambda e: self.save_json_overwrite())
         self.bind("<Command-l>", lambda e: self.load_json())
-        self.bind("e", lambda e: self.export_lua())
+        self.bind("<Command-e>", lambda e: self.export_lua())
 
     # ------------------------------------------------------------------ Drawing
 
@@ -748,22 +748,26 @@ class LevelEditor(tk.Tk if tk is not None else object):
                 self.drag_started = True
         self.update_selected_cell(cell)
 
+	# マウスReleaseイベント.
     def on_left_button_release(self, event: TkEvent) -> None:
         cell = self.canvas_to_cell(event.x, event.y)
         if cell is None:
+            # ドラッグ中にキャンバス外で離した場合は、選択セルを元に戻す
             cell = self.drag_target_cell
 
         source = self.drag_source_cell
         target = cell
+        # ドラッグ操作かどうか.
         was_dragging = self.drag_started and source is not None and target is not None and source != target
 
         if target is not None:
+            # マウスボタンを離した位置がキャンバス内であれば
+			# 新しい選択位置に設定.
             self.selected_col, self.selected_row = target
 
         if was_dragging:
+            # ドラッグ操作の場合はセルの内容を入れ替える.
             self.move_cell_contents(source, target)
-        elif target is not None and not self.drag_moved:
-            self.cycle_selected_cell()
         elif target is not None:
             self.set_selected_cell(self.current_block)
 
@@ -809,6 +813,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
 
     def on_brush_changed(self) -> None:
         self.current_block = int(self.var_brush.get())
+        print(f"ブラシ変更: {self.current_block}")
         self.draw_board()
 
     def move_selection(self, dx: int, dy: int) -> None:
