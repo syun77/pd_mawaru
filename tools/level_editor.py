@@ -347,6 +347,7 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
 
     def __init__(self, parent: "LevelEditor", stage: StageData, start_col: int, start_row: int):
         super().__init__(parent)
+        self.parent_window = parent
         self.title("テストプレイモード")
         self.resizable(False, False)
 
@@ -379,6 +380,7 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.transient(parent)
         self.focus_force()
+        self.canvas.focus_set()
 
     def on_close(self) -> None:
         if self.erase_after_id is not None:
@@ -387,6 +389,8 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
             except Exception:
                 pass
             self.erase_after_id = None
+        if hasattr(self, "parent_window"):
+            self.parent_window.focus_editor_canvas()
         self.destroy()
 
     def _build_ui(self) -> None:
@@ -405,15 +409,47 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
         height = self.margin * 2 + self.rows * self.cell_size
         self.canvas = tk.Canvas(root, width=width, height=height, bg="white", highlightthickness=1, highlightbackground="#d0d0d0")
         self.canvas.pack()
+        self.canvas.bind("<Button-1>", lambda e: self.canvas.focus_set())
+        self.bind("<FocusIn>", lambda e: self.canvas.focus_set())
 
     def _bind_keys(self) -> None:
-        self.bind("<Up>", lambda _: self.move_cursor(0, -1))
-        self.bind("<Down>", lambda _: self.move_cursor(0, 1))
-        self.bind("<Left>", lambda _: self.move_cursor(-1, 0))
-        self.bind("<Right>", lambda _: self.move_cursor(1, 0))
-        self.bind("<space>", lambda _: self.swap_vertical())
-        self.bind("<r>", lambda _: self.restart())
-        self.bind("<Escape>", lambda _: self.destroy())
+        self.bind_all("<KeyPress>", self.on_global_keypress, add="+")
+
+    def is_active_window(self) -> bool:
+        try:
+            focused_widget = self.focus_get()
+            return focused_widget is not None and focused_widget.winfo_toplevel() is self
+        except Exception:
+            return False
+
+    def on_global_keypress(self, event: TkEvent) -> str | None:
+        if not self.is_active_window():
+            return None
+
+        keysym = getattr(event, "keysym", "")
+        if keysym == "Up":
+            self.move_cursor(0, -1)
+            return "break"
+        if keysym == "Down":
+            self.move_cursor(0, 1)
+            return "break"
+        if keysym == "Left":
+            self.move_cursor(-1, 0)
+            return "break"
+        if keysym == "Right":
+            self.move_cursor(1, 0)
+            return "break"
+        if keysym == "space":
+            self.swap_vertical()
+            return "break"
+        if keysym in {"r", "R"}:
+            self.restart()
+            return "break"
+        if keysym == "Escape":
+            self.destroy()
+            return "break"
+
+        return None
 
     def _update_status(self) -> None:
         self.var_status.set(
@@ -1055,26 +1091,16 @@ class LevelEditor(tk.Tk if tk is not None else object):
         return CLEAR_CONDITION_INTERNAL_VALUES.get(display_value, display_value)
 
     def _bind_keys(self) -> None:
-        self.bind("<Left>", lambda e: self.move_selection(-1, 0))
-        self.bind("<Right>", lambda e: self.move_selection(1, 0))
-        self.bind("<Up>", lambda e: self.move_selection(0, -1))
-        self.bind("<Down>", lambda e: self.move_selection(0, 1))
-        self.bind_all("<space>", self.on_global_space, add="+")
-        self.bind("<Delete>", lambda e: self.set_selected_cell(BlockType.EMPTY))
-        self.bind("0", lambda e: self.set_brush_and_cell(BlockType.EMPTY))
-        self.bind("1", lambda e: self.set_brush_and_cell(BlockType.SLASH))
-        self.bind("2", lambda e: self.set_brush_and_cell(BlockType.BACKSLASH))
-        self.bind("3", lambda e: self.set_brush_and_cell(BlockType.VALLEY))
-        self.bind("4", lambda e: self.set_brush_and_cell(BlockType.PEAK))
-        self.bind("<Command-s>", lambda e: self.save_json_overwrite())
-        self.bind("<Command-o>", lambda e: self.load_json())
-        self.bind("<Command-e>", lambda e: self.export_lua())
-        self.bind("<F5>", lambda e: self.open_test_play_mode())
-        self.bind_all("<Command-z>", self.on_global_undo, add="+")
-        self.bind_all("<Command-y>", self.on_global_redo, add="+")
-        self.bind_all("<Command-Shift-z>", self.on_global_redo, add="+")
+        self.bind_all("<KeyPress>", self.on_global_keypress, add="+")
 
-    def _is_editable_widget(self, widget: Any) -> bool:
+    def is_active_window(self) -> bool:
+        try:
+            focused_widget = self.focus_get()
+            return focused_widget is not None and focused_widget.winfo_toplevel() is self
+        except Exception:
+            return False
+
+    def is_editable_widget(self, widget: Any) -> bool:
         if widget is None:
             return False
 
@@ -1085,37 +1111,77 @@ class LevelEditor(tk.Tk if tk is not None else object):
 
         return widget_class in {"Entry", "TEntry", "Spinbox", "TSpinbox", "Text", "TCombobox"}
 
-    def on_global_space(self, event: TkEvent) -> str | None:
-        if self._is_editable_widget(getattr(event, "widget", None)):
+    def on_global_keypress(self, event: TkEvent) -> str | None:
+        if not self.is_active_window():
             return None
 
-        self.cycle_selected_cell()
-        self.focus_editor_canvas()
-        return "break"
-
-    def on_global_undo(self, event: TkEvent) -> str | None:
-        if self.focus_get() is not None:
-            try:
-                if self.focus_get().winfo_toplevel() is not self:
-                    return None
-            except Exception:
+        widget = getattr(event, "widget", None)
+        if self.is_editable_widget(widget):
+            keysym = getattr(event, "keysym", "")
+            if keysym not in {"Escape", "F5", "Command-z", "Command-y"}:
                 return None
 
-        self.undo()
-        self.focus_editor_canvas()
-        return "break"
+        keysym = getattr(event, "keysym", "")
+        if keysym == "Left":
+            self.move_selection(-1, 0)
+            return "break"
+        if keysym == "Right":
+            self.move_selection(1, 0)
+            return "break"
+        if keysym == "Up":
+            self.move_selection(0, -1)
+            return "break"
+        if keysym == "Down":
+            self.move_selection(0, 1)
+            return "break"
+        if keysym == "space":
+            self.cycle_selected_cell()
+            self.focus_editor_canvas()
+            return "break"
+        if keysym == "Delete":
+            self.set_selected_cell(BlockType.EMPTY)
+            return "break"
+        if keysym == "0":
+            self.set_brush_and_cell(BlockType.EMPTY)
+            return "break"
+        if keysym == "1":
+            self.set_brush_and_cell(BlockType.SLASH)
+            return "break"
+        if keysym == "2":
+            self.set_brush_and_cell(BlockType.BACKSLASH)
+            return "break"
+        if keysym == "3":
+            self.set_brush_and_cell(BlockType.VALLEY)
+            return "break"
+        if keysym == "4":
+            self.set_brush_and_cell(BlockType.PEAK)
+            return "break"
+        if keysym in {"s", "S"} and getattr(event, "state", 0) & 0x0004:
+            self.save_json_overwrite()
+            return "break"
+        if keysym in {"o", "O"} and getattr(event, "state", 0) & 0x0004:
+            self.load_json()
+            return "break"
+        if keysym in {"e", "E"} and getattr(event, "state", 0) & 0x0004:
+            self.export_lua()
+            return "break"
+        if keysym == "F5":
+            self.open_test_play_mode()
+            return "break"
+        if keysym in {"z", "Z"} and getattr(event, "state", 0) & 0x0004:
+            self.undo()
+            self.focus_editor_canvas()
+            return "break"
+        if keysym in {"y", "Y"} and getattr(event, "state", 0) & 0x0004:
+            self.redo()
+            self.focus_editor_canvas()
+            return "break"
+        if keysym == "Z" and getattr(event, "state", 0) & 0x0004 and getattr(event, "state", 0) & 0x0001:
+            self.redo()
+            self.focus_editor_canvas()
+            return "break"
 
-    def on_global_redo(self, event: TkEvent) -> str | None:
-        if self.focus_get() is not None:
-            try:
-                if self.focus_get().winfo_toplevel() is not self:
-                    return None
-            except Exception:
-                return None
-
-        self.redo()
-        self.focus_editor_canvas()
-        return "break"
+        return None
 
     def capture_editor_snapshot(self) -> Dict[str, Any]:
         self.sync_stage_from_ui()
