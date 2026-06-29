@@ -351,10 +351,13 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
 
         self.columns = stage.columns
         self.rows = stage.rows
-        self.cells = [row[:] for row in stage.cells]
+        self.initial_cells = [row[:] for row in stage.cells]
+        self.cells = [row[:] for row in self.initial_cells]
 
         self.cursor_col = max(1, min(self.columns, int(start_col)))
         self.cursor_row = max(2, min(self.rows, int(start_row)))
+        self.initial_cursor_col = self.cursor_col
+        self.initial_cursor_row = self.cursor_row
         self.move_count = 0
         self.is_erasing = False
         self.erase_blink_visible = True
@@ -391,7 +394,8 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
 
         info = ttk.Frame(root)
         info.pack(fill=tk.X)
-        ttk.Label(info, text="操作: カーソルキーで移動, Space で入れ替え, Esc で閉じる").pack(side=tk.LEFT)
+        ttk.Label(info, text="操作: カーソルキーで移動, Space で入れ替え, Rでリスタート, Esc で閉じる").pack(side=tk.LEFT)
+        ttk.Button(info, text="リスタート", command=self.restart).pack(side=tk.RIGHT)
 
         self.status_label = ttk.Label(root, textvariable=self.var_status)
         self.status_label.pack(anchor=tk.W, pady=(6, 8))
@@ -407,6 +411,7 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
         self.bind("<Left>", lambda _: self.move_cursor(-1, 0))
         self.bind("<Right>", lambda _: self.move_cursor(1, 0))
         self.bind("<space>", lambda _: self.swap_vertical())
+        self.bind("<r>", lambda _: self.restart())
         self.bind("<Escape>", lambda _: self.destroy())
 
     def _update_status(self) -> None:
@@ -434,6 +439,25 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
         self.move_count += 1
         self._update_status()
         self.start_erase_if_needed()
+
+    def restart(self) -> None:
+        if self.erase_after_id is not None:
+            try:
+                self.after_cancel(self.erase_after_id)
+            except Exception:
+                pass
+            self.erase_after_id = None
+
+        self.is_erasing = False
+        self.erase_targets = set()
+        self.erase_blink_visible = True
+        self.erase_blink_ticks_left = 0
+        self.cells = [row[:] for row in self.initial_cells]
+        self.cursor_col = self.initial_cursor_col
+        self.cursor_row = self.initial_cursor_row
+        self.move_count = 0
+        self._update_status()
+        self.draw_board()
 
     def get_erase_targets(self) -> Set[Tuple[int, int]]:
         logic = BoardLogic(self.columns, self.rows, self.cells)
