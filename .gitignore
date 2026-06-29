@@ -48,4 +48,5 @@ builds/*
 # python
 *.pyc
 __pycache__/
+*.level_editor_config.json
 

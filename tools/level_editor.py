@@ -19,8 +19,10 @@ Python 3.10+ 推奨。標準ライブラリのみ使用します。
 from __future__ import annotations
 
 import json
+import os
 import random
 import sys
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 # tkinterの存在チェック.
@@ -48,13 +50,14 @@ else:
     TtkFrame = Any
 
 
-# board.lua の BLOCK と合わせる
+# board.lua の BLOCK と合わせる.
 EMPTY = 0
 SLASH = 1       # /
 BACKSLASH = 2   # \
 VALLEY = 3      # \/ 谷型: 上辺側の2点を接続
 PEAK = 4        # /\ 山型: 下辺側の2点を接続
 
+# 種別に対応するブロック名.
 BLOCK_NAMES = {
     EMPTY: "EMPTY",
     SLASH: "SLASH /",
@@ -71,6 +74,7 @@ BLOCK_SHORT = {
     PEAK: "A",
 }
 
+# クリア条件の表示用名称.
 CLEAR_CONDITION_LABELS = {
     "eraseAll": "全消し",
     "erasePanels": "一定数のパネルを消去",
@@ -79,6 +83,7 @@ CLEAR_CONDITION_LABELS = {
     "eraseMarked": "マーク付きパネルを消去",
 }
 
+# クリア条件の内部名.
 CLEAR_CONDITION_INTERNAL_VALUES = {label: value for value, label in CLEAR_CONDITION_LABELS.items()}
 
 # ステージルール.
@@ -571,25 +576,251 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.drag_started = False
         self.drag_moved = False
         self.last_saved_path = None  # 最後に保存したファイルパスを保持する変数
+        self.config_path = os.path.join(os.path.dirname(__file__), ".level_editor_config.json")
+        self.app_config: Dict[str, Any] = self.default_app_config()
 
         self._build_ui()
         self._bind_keys()
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.load_app_config()
         self.refresh_analysis()
         self.draw_board()
+
+    @staticmethod
+    def default_app_config() -> Dict[str, Any]:
+        return {
+            "version": 1,
+            "settings": {},
+            "history": {
+                "opened": [],
+                "saved": [],
+            },
+            "last_opened_file": None,
+        }
+
+    def on_close(self) -> None:
+        self.save_app_config()
+        self.destroy()
+
+    def _parse_optional_int(self, value: str) -> Optional[int]:
+        text = str(value).strip()
+        if text == "":
+            return None
+        try:
+            return int(text)
+        except Exception:
+            return None
+
+    def collect_settings_for_config(self) -> Dict[str, Any]:
+        return {
+            "stage_id": self.var_stage_id.get().strip() or self.stage.stage_id,
+            "name": self.var_name.get().strip() or self.stage.name,
+            "pack": self.var_pack.get().strip() or self.stage.pack,
+            "columns": int(self.var_columns.get()),
+            "rows": int(self.var_rows.get()),
+            "move_limit": self._parse_optional_int(self.var_move_limit.get()),
+            "clear_type": self.clear_condition_internal_value(self.var_clear_type.get().strip() or "全消し"),
+            "clear_count": self._parse_optional_int(self.var_clear_count.get()),
+            "manual_rise_enabled": bool(self.var_manual_rise.get()),
+            "auto_rise_enabled": bool(self.var_auto_rise.get()),
+            "show_erase_preview": bool(self.show_erase_preview.get()),
+            "show_wrap_columns": bool(self.show_wrap_columns.get()),
+            "selected_col": int(self.selected_col),
+            "selected_row": int(self.selected_row),
+            "current_block": int(self.current_block),
+            "last_saved_path": self.last_saved_path,
+            "window_geometry": self.geometry(),
+        }
+
+    def apply_settings_from_config(self, settings: Dict[str, Any]) -> None:
+        if not settings:
+            return
+
+        self.stage.stage_id = str(settings.get("stage_id", self.stage.stage_id))
+        self.stage.name = str(settings.get("name", self.stage.name))
+        self.stage.pack = str(settings.get("pack", self.stage.pack))
+        self.stage.columns = max(4, min(24, int(settings.get("columns", self.stage.columns))))
+        self.stage.rows = max(3, min(12, int(settings.get("rows", self.stage.rows))))
+        self.stage.rules.move_limit = settings.get("move_limit", self.stage.rules.move_limit)
+        self.stage.clear_condition.type = str(settings.get("clear_type", self.stage.clear_condition.type))
+        self.stage.clear_condition.count = settings.get("clear_count", self.stage.clear_condition.count)
+        self.stage.rules.manual_rise_enabled = bool(settings.get("manual_rise_enabled", self.stage.rules.manual_rise_enabled))
+        self.stage.rules.auto_rise_enabled = bool(settings.get("auto_rise_enabled", self.stage.rules.auto_rise_enabled))
+        self.stage.ensure_cells()
+
+        self.sync_ui_from_stage()
+        self.show_erase_preview.set(bool(settings.get("show_erase_preview", self.show_erase_preview.get())))
+        self.show_wrap_columns.set(bool(settings.get("show_wrap_columns", self.show_wrap_columns.get())))
+
+        self.current_block = int(settings.get("current_block", self.current_block))
+        if self.current_block < EMPTY or self.current_block > PEAK:
+            self.current_block = SLASH
+        self.var_brush.set(self.current_block)
+
+        selected_col = int(settings.get("selected_col", self.selected_col))
+        selected_row = int(settings.get("selected_row", self.selected_row))
+        self.selected_col = max(1, min(self.stage.columns, selected_col))
+        self.selected_row = max(1, min(self.stage.rows, selected_row))
+
+        last_saved = settings.get("last_saved_path")
+        self.last_saved_path = str(last_saved) if last_saved else None
+
+        geometry = settings.get("window_geometry")
+        if geometry:
+            try:
+                self.geometry(str(geometry))
+            except Exception:
+                pass
+
+    def append_history(self, kind: str, path: str) -> None:
+        history = self.app_config.setdefault("history", {})
+        records = history.setdefault(kind, [])
+        normalized = os.path.abspath(path)
+        now = datetime.now().isoformat(timespec="seconds")
+
+        records = [r for r in records if isinstance(r, dict) and r.get("path") != normalized]
+        records.insert(0, {"path": normalized, "at": now})
+        history[kind] = records[:20]
+        self.app_config["history"] = history
+
+    def get_recent_files(self) -> List[str]:
+        history = self.app_config.get("history", {})
+        opened = history.get("opened", []) if isinstance(history, dict) else []
+        saved = history.get("saved", []) if isinstance(history, dict) else []
+
+        result: List[str] = []
+        seen: Set[str] = set()
+
+        for source in [opened, saved]:
+            if not isinstance(source, list):
+                continue
+            for rec in source:
+                if not isinstance(rec, dict):
+                    continue
+                path = rec.get("path")
+                if not isinstance(path, str) or not path:
+                    continue
+                normalized = os.path.abspath(path)
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                result.append(normalized)
+
+        return result[:20]
+
+    def refresh_recent_files_menu(self) -> None:
+        if not hasattr(self, "recent_open_menu"):
+            return
+
+        self.recent_open_menu.delete(0, tk.END)
+        recent_files = self.get_recent_files()
+        if not recent_files:
+            self.recent_open_menu.add_command(label="履歴なし", state=tk.DISABLED)
+            return
+
+        for path in recent_files:
+            exists = os.path.isfile(path)
+            base_name = os.path.basename(path) or path
+            label = f"{base_name}"
+            if not exists:
+                label += " (見つかりません)"
+
+            if exists:
+                self.recent_open_menu.add_command(
+                    label=label,
+                    command=lambda p=path: self.load_json_from_path(p),
+                )
+            else:
+                self.recent_open_menu.add_command(label=label, state=tk.DISABLED)
+
+    def load_app_config(self) -> None:
+        if not os.path.isfile(self.config_path):
+            self.refresh_recent_files_menu()
+            return
+
+        try:
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+        except Exception:
+            return
+
+        if not isinstance(loaded, dict):
+            self.refresh_recent_files_menu()
+            return
+
+        self.app_config = self.default_app_config()
+        self.app_config.update(loaded)
+
+        settings = self.app_config.get("settings", {})
+        if isinstance(settings, dict):
+            self.apply_settings_from_config(settings)
+
+        last_opened = self.app_config.get("last_opened_file")
+        if isinstance(last_opened, str) and last_opened and os.path.isfile(last_opened):
+            self.load_json_from_path(last_opened, show_error=False, record_history=False)
+        self.refresh_recent_files_menu()
+
+    def save_app_config(self) -> None:
+        self.app_config["settings"] = self.collect_settings_for_config()
+        try:
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(self.app_config, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def save_json_to_path(self, path: str) -> None:
+        try:
+            data = self.to_json_dict()
+        except Exception as exc:
+            messagebox.showerror("エラー", f"ステージ設定の変換に失敗しました。\n{exc}")
+            return
+
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        normalized = os.path.abspath(path)
+        self.last_saved_path = normalized
+        self.app_config["last_opened_file"] = normalized
+        self.append_history("saved", normalized)
+        self.save_app_config()
+        self.refresh_recent_files_menu()
+
+    def load_json_from_path(self, path: str, show_error: bool = True, record_history: bool = True) -> bool:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.load_from_json_dict(data)
+        except Exception as exc:
+            if show_error:
+                messagebox.showerror("エラー", f"JSON読込に失敗しました。\n{exc}")
+            return False
+
+        normalized = os.path.abspath(path)
+        self.last_saved_path = normalized
+        self.app_config["last_opened_file"] = normalized
+        if record_history:
+            self.append_history("opened", normalized)
+        self.save_app_config()
+        self.refresh_recent_files_menu()
+        return True
 
     # ------------------------------------------------------------------ UI
 
     def _build_menu_bar(self) -> None:
         menu_bar = tk.Menu(self)
 
-        file_menu = tk.Menu(menu_bar, tearoff=False)
-        file_menu.add_command(label="JSON保存", command=self.save_json)
-        file_menu.add_command(label="JSON上書き保存", command=self.save_json_overwrite)
-        file_menu.add_command(label="JSON読込", command=self.load_json)
-        file_menu.add_separator()
-        file_menu.add_command(label="Luaステージ出力", command=self.export_lua)
-        file_menu.add_command(label="Luaをクリップボードへコピー", command=self.copy_lua_to_clipboard)
-        menu_bar.add_cascade(label="ファイル", menu=file_menu)
+        self.file_menu = tk.Menu(menu_bar, tearoff=False)
+        self.file_menu.add_command(label="JSON保存", command=self.save_json)
+        self.file_menu.add_command(label="JSON上書き保存", command=self.save_json_overwrite)
+        self.file_menu.add_command(label="JSON読込", command=self.load_json)
+
+        self.recent_open_menu = tk.Menu(self.file_menu, tearoff=False)
+        self.file_menu.add_cascade(label="履歴から開く", menu=self.recent_open_menu)
+
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="Luaステージ出力", command=self.export_lua)
+        self.file_menu.add_command(label="Luaをクリップボードへコピー", command=self.copy_lua_to_clipboard)
+        menu_bar.add_cascade(label="ファイル", menu=self.file_menu)
 
         edit_menu = tk.Menu(menu_bar, tearoff=False)
         edit_menu.add_command(label="全消去", command=self.clear_board)
@@ -605,6 +836,8 @@ class LevelEditor(tk.Tk if tk is not None else object):
         test_menu = tk.Menu(menu_bar, tearoff=False)
         test_menu.add_command(label="テストプレイ開始", command=self.open_test_play_mode)
         menu_bar.add_cascade(label="テスト", menu=test_menu)
+
+        self.refresh_recent_files_menu()
 
         self.config(menu=menu_bar)
 
@@ -1270,12 +1503,6 @@ class LevelEditor(tk.Tk if tk is not None else object):
     # ------------------------------------------------------------------ File I/O
 	# 名前をつけて保存.
     def save_json(self) -> None:
-        try:
-            data = self.to_json_dict()
-        except Exception as exc:
-            messagebox.showerror("エラー", f"ステージ設定の変換に失敗しました。\n{exc}")
-            return
-
 		# 保存ファイルダイアログを表示.
         path = filedialog.asksaveasfilename(
             defaultextension=".json",
@@ -1284,37 +1511,21 @@ class LevelEditor(tk.Tk if tk is not None else object):
         )
         if not path:
             return # キャンセルされた場合は何もしない.
-        with open(path, "w", encoding="utf-8") as f:
-            # JSONを整形して保存.
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            # 最後に保存したパスを保持.
-            self.last_saved_path = path
+        self.save_json_to_path(path)
 
 	# 保存ダイアログなしで上書き保存.
     def save_json_overwrite(self) -> None:
         if not self.last_saved_path:
             self.save_json()  # 保存ダイアログを表示して保存.
             return
-        try:
-            data = self.to_json_dict()
-        except Exception as exc:
-            messagebox.showerror("エラー", f"ステージ設定の変換に失敗しました。\n{exc}")
-            return
+        self.save_json_to_path(self.last_saved_path)
 
-        with open(self.last_saved_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
     # jsonの読み込み.
     def load_json(self) -> None:
         path = filedialog.askopenfilename(filetypes=[("JSON", "*.json"), ("All files", "*.*")])
         if not path:
             return
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self.load_from_json_dict(data)
-            self.last_saved_path = path # 最後に読み込んだパスを保持.
-        except Exception as exc:
-            messagebox.showerror("エラー", f"JSON読込に失敗しました。\n{exc}")
+        self.load_json_from_path(path)
     # Luaに書き出す.
     def export_lua(self) -> None:
         try:
