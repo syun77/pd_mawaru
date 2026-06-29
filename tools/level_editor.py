@@ -334,6 +334,145 @@ class BoardLogic:
                     result.append((col, row))
         return result
 
+
+class TestPlayWindow(tk.Toplevel if tk is not None else object):
+    """簡易テストプレイ用の別ウィンドウ。"""
+
+    def __init__(self, parent: "LevelEditor", stage: StageData, start_col: int, start_row: int):
+        super().__init__(parent)
+        self.title("テストプレイモード")
+        self.resizable(False, False)
+
+        self.columns = stage.columns
+        self.rows = stage.rows
+        self.cells = [row[:] for row in stage.cells]
+
+        self.cursor_col = max(1, min(self.columns, int(start_col)))
+        self.cursor_row = max(2, min(self.rows, int(start_row)))
+        self.move_count = 0
+
+        self.cell_size = 56
+        self.margin = 24
+
+        self.var_status = tk.StringVar()
+
+        self._build_ui()
+        self._bind_keys()
+        self._update_status()
+        self.draw_board()
+
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.transient(parent)
+        self.focus_force()
+
+    def _build_ui(self) -> None:
+        root = ttk.Frame(self)
+        root.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        info = ttk.Frame(root)
+        info.pack(fill=tk.X)
+        ttk.Label(info, text="操作: カーソルキーで移動, Space で入れ替え, Esc で閉じる").pack(side=tk.LEFT)
+
+        self.status_label = ttk.Label(root, textvariable=self.var_status)
+        self.status_label.pack(anchor=tk.W, pady=(6, 8))
+
+        width = self.margin * 2 + self.columns * self.cell_size
+        height = self.margin * 2 + self.rows * self.cell_size
+        self.canvas = tk.Canvas(root, width=width, height=height, bg="white", highlightthickness=1, highlightbackground="#d0d0d0")
+        self.canvas.pack()
+
+    def _bind_keys(self) -> None:
+        self.bind("<Up>", lambda _: self.move_cursor(0, -1))
+        self.bind("<Down>", lambda _: self.move_cursor(0, 1))
+        self.bind("<Left>", lambda _: self.move_cursor(-1, 0))
+        self.bind("<Right>", lambda _: self.move_cursor(1, 0))
+        self.bind("<space>", lambda _: self.swap_vertical())
+        self.bind("<Escape>", lambda _: self.destroy())
+
+    def _update_status(self) -> None:
+        self.var_status.set(
+            f"列: {self.cursor_col} / カーソル行: {self.cursor_row} と {self.cursor_row - 1} / 手数: {self.move_count}"
+        )
+
+    def move_cursor(self, dx: int, dy: int) -> None:
+        # 列は円環なので左右移動はループさせる。
+        self.cursor_col = ((self.cursor_col + dx - 1) % self.columns) + 1
+        self.cursor_row = max(2, min(self.rows, self.cursor_row + dy))
+        self._update_status()
+        self.draw_board()
+
+    def swap_vertical(self) -> None:
+        row = self.cursor_row
+        col = self.cursor_col
+        self.cells[row - 1][col - 1], self.cells[row - 2][col - 1] = self.cells[row - 2][col - 1], self.cells[row - 1][col - 1]
+        self.move_count += 1
+        self._update_status()
+        self.draw_board()
+
+    def draw_board(self) -> None:
+        self.canvas.delete("all")
+        size = self.cell_size
+        margin = self.margin
+
+        for row in range(1, self.rows + 1):
+            y = margin + (row - 1) * size
+            self.canvas.create_text(margin - 10, y + size / 2, text=str(row), anchor=tk.E, fill="#555")
+
+            for col in range(1, self.columns + 1):
+                x = margin + (col - 1) * size
+                block = self.cells[row - 1][col - 1]
+
+                is_cursor = (col == self.cursor_col and (row == self.cursor_row or row == self.cursor_row - 1))
+                fill = "#fefefe"
+                outline = "#b0b0b0"
+                line_fill = "#222222"
+
+                if is_cursor:
+                    fill = "#e9f3ff"
+                    outline = "#0a66c2"
+
+                self.canvas.create_rectangle(x, y, x + size, y + size, fill=fill, outline=outline, width=2 if is_cursor else 1)
+
+                if block == EMPTY:
+                    continue
+
+                pad = 9
+                left = x + pad
+                right = x + size - pad
+                top = y + pad
+                bottom = y + size - pad
+                mid_x = x + size / 2
+                line_width = 4
+
+                if block == SLASH:
+                    self.canvas.create_line(left, bottom, right, top, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+                elif block == BACKSLASH:
+                    self.canvas.create_line(left, top, right, bottom, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+                elif block == VALLEY:
+                    apex_y = top + (bottom - top) * 0.65
+                    self.canvas.create_line(left, top, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+                    self.canvas.create_line(right, top, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+                elif block == PEAK:
+                    apex_y = top + (bottom - top) * 0.35
+                    self.canvas.create_line(left, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+                    self.canvas.create_line(right, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
+
+        cursor_x = margin + (self.cursor_col - 1) * size
+        top_row_y = margin + (self.cursor_row - 2) * size
+        self.canvas.create_rectangle(
+            cursor_x + 3,
+            top_row_y + 3,
+            cursor_x + size - 3,
+            top_row_y + size * 2 - 3,
+            outline="#0a66c2",
+            width=2,
+            dash=(6, 4),
+        )
+
+        for col in range(1, self.columns + 1):
+            x = margin + (col - 1) * size + size / 2
+            self.canvas.create_text(x, margin - 10, text=str(col), fill="#555")
+
 # ------------------------------------------------------------------
 # レベルエディタ.
 # ------------------------------------------------------------------
@@ -392,6 +531,10 @@ class LevelEditor(tk.Tk if tk is not None else object):
         edit_menu.add_command(label="選択列を下へ", command=lambda: self.shift_column(1))
         menu_bar.add_cascade(label="編集", menu=edit_menu)
 
+        test_menu = tk.Menu(menu_bar, tearoff=False)
+        test_menu.add_command(label="テストプレイ開始", command=self.open_test_play_mode)
+        menu_bar.add_cascade(label="テスト", menu=test_menu)
+
         self.config(menu=menu_bar)
 
     def _build_ui(self) -> None:
@@ -416,6 +559,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         bottom.pack(fill=tk.X, padx=8, pady=6)
         ttk.Button(bottom, text="消去プレビュー更新", command=self.refresh_and_draw).pack(side=tk.LEFT, padx=2)
         ttk.Button(bottom, text="1手候補", command=self.show_one_move_candidates).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bottom, text="テストプレイ", command=self.open_test_play_mode).pack(side=tk.LEFT, padx=2)
         ttk.Checkbutton(bottom, text="消去対象を表示", variable=self.show_erase_preview, command=self.draw_board).pack(side=tk.LEFT, padx=8)
         ttk.Checkbutton(bottom, text="左右複製列を表示", variable=self.show_wrap_columns, command=self.draw_board).pack(side=tk.LEFT, padx=8)
 
@@ -573,6 +717,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.bind("<Command-s>", lambda e: self.save_json_overwrite())
         self.bind("<Command-l>", lambda e: self.load_json())
         self.bind("<Command-e>", lambda e: self.export_lua())
+        self.bind("<F5>", lambda e: self.open_test_play_mode())
 
     # ------------------------------------------------------------------ Drawing
 
@@ -813,7 +958,6 @@ class LevelEditor(tk.Tk if tk is not None else object):
 
     def on_brush_changed(self) -> None:
         self.current_block = int(self.var_brush.get())
-        print(f"ブラシ変更: {self.current_block}")
         self.draw_board()
 
     def move_selection(self, dx: int, dy: int) -> None:
@@ -954,6 +1098,12 @@ class LevelEditor(tk.Tk if tk is not None else object):
     def show_one_move_candidates(self) -> None:
         self.one_move_candidates = self.get_logic().one_move_loop_candidates()
         self.refresh_and_draw()
+
+    # ------------------------------------------------------------------ Test play
+
+    def open_test_play_mode(self) -> None:
+        start_row = max(2, self.selected_row)
+        TestPlayWindow(self, self.stage, self.selected_col, start_row)
 
     # ------------------------------------------------------------------ Stage conversion
 
