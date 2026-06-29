@@ -22,6 +22,7 @@ import json
 import os
 import random
 import sys
+from enum import IntEnum
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
@@ -51,27 +52,27 @@ else:
 
 
 # board.lua の BLOCK と合わせる.
-EMPTY = 0
-SLASH = 1       # /
-BACKSLASH = 2   # \
-VALLEY = 3      # \/ 谷型: 上辺側の2点を接続
-PEAK = 4        # /\ 山型: 下辺側の2点を接続
-
+class BlockType(IntEnum):
+	EMPTY = 0
+	SLASH = 1       # /
+	BACKSLASH = 2   # \
+	VALLEY = 3      # \/ 谷型: 上辺側の2点を接続
+	PEAK = 4        # /\ 山型: 下辺側の2点を接続
 # 種別に対応するブロック名.
 BLOCK_NAMES = {
-    EMPTY: "EMPTY",
-    SLASH: "SLASH /",
-    BACKSLASH: "BACKSLASH \\",
-    VALLEY: r"VALLEY \/",
-    PEAK: "PEAK /\\",
+    BlockType.EMPTY: "EMPTY",
+    BlockType.SLASH: "SLASH /",
+    BlockType.BACKSLASH: "BACKSLASH \\",
+    BlockType.VALLEY: r"VALLEY \/",
+    BlockType.PEAK: "PEAK /\\",
 }
 
 BLOCK_SHORT = {
-    EMPTY: ".",
-    SLASH: "/",
-    BACKSLASH: "\\",
-    VALLEY: "V",
-    PEAK: "A",
+    BlockType.EMPTY: ".",
+    BlockType.SLASH: "/",
+    BlockType.BACKSLASH: "\\",
+    BlockType.VALLEY: "V",
+    BlockType.PEAK: "A",
 }
 
 # クリア条件の表示用名称.
@@ -124,15 +125,15 @@ class StageData:
 
     def ensure_cells(self) -> None:
         if not self.cells:
-            self.cells = [[EMPTY for _ in range(self.columns)] for _ in range(self.rows)]
+            self.cells = [[BlockType.EMPTY for _ in range(self.columns)] for _ in range(self.rows)]
             return
 
         # 行数・列数が足りない/多い場合は調整
-        new_cells = [[EMPTY for _ in range(self.columns)] for _ in range(self.rows)]
+        new_cells = [[BlockType.EMPTY for _ in range(self.columns)] for _ in range(self.rows)]
         for r in range(min(self.rows, len(self.cells))):
             for c in range(min(self.columns, len(self.cells[r]))):
                 v = int(self.cells[r][c])
-                new_cells[r][c] = v if EMPTY <= v <= PEAK else EMPTY
+                new_cells[r][c] = v if BlockType.EMPTY <= v <= BlockType.PEAK else BlockType.EMPTY
         self.cells = new_cells
 
 
@@ -173,13 +174,13 @@ class BoardLogic:
         inner_left = self.get_node_id(col, row + 1)
         inner_right = self.get_node_id(col + 1, row + 1)
 
-        if block_type == SLASH:
+        if block_type == BlockType.SLASH:
             return inner_left, outer_right
-        if block_type == BACKSLASH:
+        if block_type == BlockType.BACKSLASH:
             return outer_left, inner_right
-        if block_type == VALLEY:
+        if block_type == BlockType.VALLEY:
             return outer_left, outer_right
-        if block_type == PEAK:
+        if block_type == BlockType.PEAK:
             return inner_left, inner_right
         return None, None
 
@@ -206,7 +207,7 @@ class BoardLogic:
         for row in range(1, self.rows + 1):
             for col in range(1, self.columns + 1):
                 block_type = self.get_cell(col, row)
-                if block_type == EMPTY:
+                if block_type == BlockType.EMPTY:
                     continue
 
                 index = self.get_index(col, row)
@@ -310,7 +311,7 @@ class BoardLogic:
             for col in range(1, self.columns + 1):
                 index = self.get_index(col, row)
                 block_type = self.get_cell(col, row)
-                if block_type != EMPTY and index in cycle_cell_set and index not in visited:
+                if block_type != BlockType.EMPTY and index in cycle_cell_set and index not in visited:
                     component = self.collect_connected_indices(index, adjacency, cycle_cell_set, visited)
                     if component:
                         groups.append(component)
@@ -468,7 +469,7 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
 
     def finalize_erase(self) -> None:
         for col, row in self.erase_targets:
-            self.cells[row - 1][col - 1] = EMPTY
+            self.cells[row - 1][col - 1] = BlockType.EMPTY
 
         self.is_erasing = False
         self.erase_targets = set()
@@ -509,7 +510,7 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
 
                 self.canvas.create_rectangle(x, y, x + size, y + size, fill=fill, outline=outline, width=2 if is_cursor else 1)
 
-                if block == EMPTY or (is_blink_target and not self.erase_blink_visible):
+                if block == BlockType.EMPTY or (is_blink_target and not self.erase_blink_visible):
                     continue
 
                 pad = 9
@@ -520,15 +521,15 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
                 mid_x = x + size / 2
                 line_width = 4
 
-                if block == SLASH:
+                if block == BlockType.SLASH:
                     self.canvas.create_line(left, bottom, right, top, width=line_width, fill=line_fill, capstyle=tk.ROUND)
-                elif block == BACKSLASH:
+                elif block == BlockType.BACKSLASH:
                     self.canvas.create_line(left, top, right, bottom, width=line_width, fill=line_fill, capstyle=tk.ROUND)
-                elif block == VALLEY:
+                elif block == BlockType.VALLEY:
                     apex_y = top + (bottom - top) * 0.65
                     self.canvas.create_line(left, top, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
                     self.canvas.create_line(right, top, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
-                elif block == PEAK:
+                elif block == BlockType.PEAK:
                     apex_y = top + (bottom - top) * 0.35
                     self.canvas.create_line(left, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
                     self.canvas.create_line(right, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
@@ -566,7 +567,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.margin = 24
         self.selected_col = 1
         self.selected_row = 1
-        self.current_block = SLASH
+        self.current_block = BlockType.SLASH
         self.show_erase_preview = tk.BooleanVar(value=True)
         self.show_wrap_columns = tk.BooleanVar(value=True)
         self.erase_coords: Set[Tuple[int, int]] = set()
@@ -653,8 +654,8 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.show_wrap_columns.set(bool(settings.get("show_wrap_columns", self.show_wrap_columns.get())))
 
         self.current_block = int(settings.get("current_block", self.current_block))
-        if self.current_block < EMPTY or self.current_block > PEAK:
-            self.current_block = SLASH
+        if self.current_block < BlockType.EMPTY or self.current_block > BlockType.PEAK:
+            self.current_block = BlockType.SLASH
         self.var_brush.set(self.current_block)
 
         selected_col = int(settings.get("selected_col", self.selected_col))
@@ -934,7 +935,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         group = ttk.LabelFrame(parent, text="ブラシ")
         group.pack(fill=tk.X, pady=4)
         self.var_brush = tk.IntVar(value=self.current_block)
-        for value in [EMPTY, SLASH, BACKSLASH, VALLEY, PEAK]:
+        for value in [BlockType.EMPTY, BlockType.SLASH, BlockType.BACKSLASH, BlockType.VALLEY, BlockType.PEAK]:
             self._build_brush_option(group, value)
 
         ttk.Label(group, text="キー: 0-4 / Spaceでセル切替 / 右クリックで空白").pack(anchor=tk.W, padx=6, pady=(4, 2))
@@ -976,19 +977,19 @@ class LevelEditor(tk.Tk if tk is not None else object):
         line_width = 3
         line_fill = "#222222"
 
-        if block == EMPTY:
+        if block == BlockType.EMPTY:
             canvas.create_rectangle(left, top, right, bottom, outline="#d8d8d8")
             return
 
-        if block == SLASH:
+        if block == BlockType.SLASH:
             canvas.create_line(left, bottom, right, top, width=line_width, fill=line_fill, capstyle=tk.ROUND)
-        elif block == BACKSLASH:
+        elif block == BlockType.BACKSLASH:
             canvas.create_line(left, top, right, bottom, width=line_width, fill=line_fill, capstyle=tk.ROUND)
-        elif block == VALLEY:
+        elif block == BlockType.VALLEY:
             apex_y = top + (bottom - top) * 0.65
             canvas.create_line(left, top, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
             canvas.create_line(right, top, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
-        elif block == PEAK:
+        elif block == BlockType.PEAK:
             apex_y = top + (bottom - top) * 0.35
             canvas.create_line(left, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
             canvas.create_line(right, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
@@ -1022,12 +1023,12 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.bind("<Up>", lambda e: self.move_selection(0, -1))
         self.bind("<Down>", lambda e: self.move_selection(0, 1))
         self.bind("<space>", lambda e: self.cycle_selected_cell())
-        self.bind("<Delete>", lambda e: self.set_selected_cell(EMPTY))
-        self.bind("0", lambda e: self.set_brush_and_cell(EMPTY))
-        self.bind("1", lambda e: self.set_brush_and_cell(SLASH))
-        self.bind("2", lambda e: self.set_brush_and_cell(BACKSLASH))
-        self.bind("3", lambda e: self.set_brush_and_cell(VALLEY))
-        self.bind("4", lambda e: self.set_brush_and_cell(PEAK))
+        self.bind("<Delete>", lambda e: self.set_selected_cell(BlockType.EMPTY))
+        self.bind("0", lambda e: self.set_brush_and_cell(BlockType.EMPTY))
+        self.bind("1", lambda e: self.set_brush_and_cell(BlockType.SLASH))
+        self.bind("2", lambda e: self.set_brush_and_cell(BlockType.BACKSLASH))
+        self.bind("3", lambda e: self.set_brush_and_cell(BlockType.VALLEY))
+        self.bind("4", lambda e: self.set_brush_and_cell(BlockType.PEAK))
         self.bind("<Command-s>", lambda e: self.save_json_overwrite())
         self.bind("<Command-o>", lambda e: self.load_json())
         self.bind("<Command-e>", lambda e: self.export_lua())
@@ -1114,7 +1115,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         if is_wrap_copy:
             self.canvas.create_rectangle(x + 4, y + 4, x + size - 4, y + size - 4, outline="#eeeeee")
 
-        if block == EMPTY:
+        if block == BlockType.EMPTY:
             return
 
         pad = 9
@@ -1127,15 +1128,15 @@ class LevelEditor(tk.Tk if tk is not None else object):
         line_width = 4
         line_fill = "#222222" if not is_wrap_copy else "#999999"
 
-        if block == SLASH:
+        if block == BlockType.SLASH:
             self.canvas.create_line(left, bottom, right, top, width=line_width, fill=line_fill, capstyle=tk.ROUND)
-        elif block == BACKSLASH:
+        elif block == BlockType.BACKSLASH:
             self.canvas.create_line(left, top, right, bottom, width=line_width, fill=line_fill, capstyle=tk.ROUND)
-        elif block == VALLEY:
+        elif block == BlockType.VALLEY:
             apex_y = top + (bottom - top) * 0.65
             self.canvas.create_line(left, top, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
             self.canvas.create_line(right, top, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
-        elif block == PEAK:
+        elif block == BlockType.PEAK:
             apex_y = top + (bottom - top) * 0.35
             self.canvas.create_line(left, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
             self.canvas.create_line(right, bottom, mid_x, apex_y, width=line_width, fill=line_fill, capstyle=tk.ROUND)
@@ -1203,7 +1204,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         if self.drag_source_cell is not None and cell != self.drag_source_cell:
             self.drag_moved = True
             source_col, source_row = self.drag_source_cell
-            if self.stage.cells[source_row - 1][source_col - 1] != EMPTY:
+            if self.stage.cells[source_row - 1][source_col - 1] != BlockType.EMPTY:
                 self.drag_started = True
         self.update_selected_cell(cell)
 
@@ -1246,11 +1247,11 @@ class LevelEditor(tk.Tk if tk is not None else object):
 
         source_value = self.stage.cells[source_row - 1][source_col - 1]
         target_value = self.stage.cells[target_row - 1][target_col - 1]
-        if source_value == EMPTY:
+        if source_value == BlockType.EMPTY:
             return
 
         self.stage.cells[target_row - 1][target_col - 1] = source_value
-        self.stage.cells[source_row - 1][source_col - 1] = target_value if target_value != EMPTY else EMPTY
+        self.stage.cells[source_row - 1][source_col - 1] = target_value if target_value != BlockType.EMPTY else BlockType.EMPTY
         self.one_move_candidates = []
         self.refresh_and_draw()
 
@@ -1259,7 +1260,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
         if cell is None:
             return
         self.selected_col, self.selected_row = cell
-        self.set_selected_cell(EMPTY)
+        self.set_selected_cell(BlockType.EMPTY)
 
     def on_mouse_wheel(self, event: TkEvent) -> None:
         cell = self.canvas_to_cell(event.x, event.y)
@@ -1318,14 +1319,14 @@ class LevelEditor(tk.Tk if tk is not None else object):
         self.refresh_and_draw()
 
     def clear_board(self) -> None:
-        self.stage.cells = [[EMPTY for _ in range(self.stage.columns)] for _ in range(self.stage.rows)]
+        self.stage.cells = [[BlockType.EMPTY for _ in range(self.stage.columns)] for _ in range(self.stage.rows)]
         self.one_move_candidates = []
         self.refresh_and_draw()
 
     def randomize_board(self) -> None:
         for r in range(self.stage.rows):
             for c in range(self.stage.columns):
-                self.stage.cells[r][c] = random.randint(1, 4)
+                self.stage.cells[r][c] = random.choice([BlockType.SLASH, BlockType.BACKSLASH, BlockType.VALLEY, BlockType.PEAK])
         self.one_move_candidates = []
         self.refresh_and_draw()
 
@@ -1365,7 +1366,7 @@ class LevelEditor(tk.Tk if tk is not None else object):
             for index in group:
                 self.erase_coords.add(logic.index_to_cell(index))
 
-        filled = sum(1 for row in self.stage.cells for v in row if v != EMPTY)
+        filled = sum(1 for row in self.stage.cells for v in row if v != BlockType.EMPTY)
         empty = self.stage.columns * self.stage.rows - filled
         wrap_used = self.has_wrap_loop(groups, logic)
 
