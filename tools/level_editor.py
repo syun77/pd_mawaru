@@ -350,6 +350,11 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
         self.cursor_col = max(1, min(self.columns, int(start_col)))
         self.cursor_row = max(2, min(self.rows, int(start_row)))
         self.move_count = 0
+        self.is_erasing = False
+        self.erase_blink_visible = True
+        self.erase_targets: Set[Tuple[int, int]] = set()
+        self.erase_blink_ticks_left = 0
+        self.erase_after_id: Any = None
 
         self.cell_size = 56
         self.margin = 24
@@ -361,9 +366,18 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
         self._update_status()
         self.draw_board()
 
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.transient(parent)
         self.focus_force()
+
+    def on_close(self) -> None:
+        if self.erase_after_id is not None:
+            try:
+                self.after_cancel(self.erase_after_id)
+            except Exception:
+                pass
+            self.erase_after_id = None
+        self.destroy()
 
     def _build_ui(self) -> None:
         root = ttk.Frame(self)
@@ -395,6 +409,9 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
         )
 
     def move_cursor(self, dx: int, dy: int) -> None:
+        if self.is_erasing:
+            return
+
         # 列は円環なので左右移動はループさせる。
         self.cursor_col = ((self.cursor_col + dx - 1) % self.columns) + 1
         self.cursor_row = max(2, min(self.rows, self.cursor_row + dy))
@@ -402,12 +419,61 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
         self.draw_board()
 
     def swap_vertical(self) -> None:
+        if self.is_erasing:
+            return
+
         row = self.cursor_row
         col = self.cursor_col
         self.cells[row - 1][col - 1], self.cells[row - 2][col - 1] = self.cells[row - 2][col - 1], self.cells[row - 1][col - 1]
         self.move_count += 1
         self._update_status()
+        self.start_erase_if_needed()
+
+    def get_erase_targets(self) -> Set[Tuple[int, int]]:
+        logic = BoardLogic(self.columns, self.rows, self.cells)
+        groups = logic.check_erase_groups()
+        targets: Set[Tuple[int, int]] = set()
+        for group in groups:
+            for index in group:
+                targets.add(logic.index_to_cell(index))
+        return targets
+
+    def start_erase_if_needed(self) -> None:
+        targets = self.get_erase_targets()
+        if not targets:
+            self.draw_board()
+            return
+
+        self.is_erasing = True
+        self.erase_targets = targets
+        self.erase_blink_visible = True
+        self.erase_blink_ticks_left = 6
         self.draw_board()
+        self.step_erase_blink()
+
+    def step_erase_blink(self) -> None:
+        self.erase_blink_ticks_left -= 1
+        if self.erase_blink_ticks_left <= 0:
+            self.finalize_erase()
+            return
+
+        self.erase_blink_visible = not self.erase_blink_visible
+        self.draw_board()
+        self.erase_after_id = self.after(120, self.step_erase_blink)
+
+    def finalize_erase(self) -> None:
+        for col, row in self.erase_targets:
+            self.cells[row - 1][col - 1] = EMPTY
+
+        self.is_erasing = False
+        self.erase_targets = set()
+        self.erase_blink_visible = True
+        self.erase_blink_ticks_left = 0
+        self.erase_after_id = None
+        self.draw_board()
+
+        # 消去後に新しいループが残っていれば連鎖的に消去する。
+        self.start_erase_if_needed()
 
     def draw_board(self) -> None:
         self.canvas.delete("all")
@@ -423,6 +489,7 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
                 block = self.cells[row - 1][col - 1]
 
                 is_cursor = (col == self.cursor_col and (row == self.cursor_row or row == self.cursor_row - 1))
+                is_blink_target = (col, row) in self.erase_targets
                 fill = "#fefefe"
                 outline = "#b0b0b0"
                 line_fill = "#222222"
@@ -431,9 +498,13 @@ class TestPlayWindow(tk.Toplevel if tk is not None else object):
                     fill = "#e9f3ff"
                     outline = "#0a66c2"
 
+                if is_blink_target:
+                    fill = "#ffe8e8" if self.erase_blink_visible else "#ffffff"
+                    outline = "#d9534f" if self.erase_blink_visible else "#b0b0b0"
+
                 self.canvas.create_rectangle(x, y, x + size, y + size, fill=fill, outline=outline, width=2 if is_cursor else 1)
 
-                if block == EMPTY:
+                if block == EMPTY or (is_blink_target and not self.erase_blink_visible):
                     continue
 
                 pad = 9
