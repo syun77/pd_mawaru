@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "id": "stage_002",
+  "name": "First Loop",
+  "pack": "tutorial",
+  "board": {
+    "columns": 10,
+    "rows": 6,
+    "cells": [
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0,
+        0,
+        0
+      ],
+      [
+        4,
+        0,
+        1,
+        2,
+        0,
+        1,
+        0,
+        1,
+        2,
+        1
+      ],
+      [
+        0,
+        2,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    ]
+  },
+  "cursorStart": {
+    "col": 5,
+    "row": 3
+  },
+  "rules": {
+    "moveLimit": 8,
+    "timeLimit": null,
+    "manualRiseEnabled": false,
+    "autoRiseEnabled": false,
+    "autoRiseInterval": null
+  },
+  "riseQueue": [],
+  "clearCondition": {
+    "type": "eraseAll",
+    "count": null,
+    "mark": null
+  },
+  "notes": ""
+}

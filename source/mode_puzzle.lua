@@ -14,6 +14,7 @@ local gfx <const> = pd.graphics
 class("ModePuzzle").extends()
 
 local GAMESTATE = {
+	STAGE_SELECT = -1,
 	PLAYING = 0,
 	CHECK_ERASE = 1,
 	ERASING = 2,
@@ -62,6 +63,34 @@ local STAGES = {
 		riseQueue = {}
 	}
 }
+
+-- stage/ フォルダの JSON ファイルからステージリストを読み込む.
+local function loadStageListFromFiles()
+	local files = playdate.file.listFiles("stage") or {}
+	local stages = {}
+
+	for _, filename in ipairs(files) do
+		if string.match(filename, "^stage_%d+%.json$") then
+			local path = "stage/" .. filename
+			local data = json.decodeFile(path)
+			if data ~= nil then
+				stages[#stages + 1] = data
+			end
+		end
+	end
+
+	-- id 順にソート.
+	table.sort(stages, function(a, b)
+		return (a.id or "") < (b.id or "")
+	end)
+
+	-- ファイルが見つからない場合はハードコードのデータにフォールバック.
+	if #stages == 0 then
+		stages = STAGES
+	end
+
+	return stages
+end
 
 local function isJustPressedLeft()
 	if pd.isCrankDocked() then
@@ -130,9 +159,16 @@ end
 function ModePuzzle:init(onExitToTitle)
 	self.onExitToTitle = onExitToTitle
 	self.stageIndex = 1
+	self.stageSelectIndex = 1
+	self.stages = {}
 end
 
 function ModePuzzle:enter()
+	self.stages = loadStageListFromFiles()
+	self.stageSelectIndex = 1
+	self.gameState = GAMESTATE.STAGE_SELECT
+	self.frameCount = 0
+
 	BeatMachine.Create()
 	BeatMachine.LoadBeat("beats/demo.bmf")
 	BeatMachine.PlayTheBeat(0)
@@ -140,8 +176,6 @@ function ModePuzzle:enter()
 
 	self.gameContext = GameContext.getInstance()
 	self.gameContext:setup()
-
-	self:loadStage(self.stageIndex)
 end
 
 function ModePuzzle:exit()
@@ -149,10 +183,12 @@ function ModePuzzle:exit()
 end
 
 function ModePuzzle:loadStage(index)
-	local stage = STAGES[index]
+	local stage = self.stages[index]
 	if stage == nil then
-		stage = STAGES[1]
+		stage = self.stages[1]
 		self.stageIndex = 1
+	else
+		self.stageIndex = index
 	end
 	self.stage = stage
 
@@ -160,17 +196,23 @@ function ModePuzzle:loadStage(index)
 	local rows = stage.board.rows
 	self.board = Board({ columns = columns, depth = rows })
 
+	local startCol = stage.cursorStart and stage.cursorStart.col or 1
+	local startRow = stage.cursorStart and stage.cursorStart.row or 2
+
+	-- cursorStart.col をオフセットとしてパネル配置をシフト（カーソルは列1固定）.
+	-- stage データ上の startCol 列がカーソル位置(列1)に来るよう回転させる.
+	local colOffset = startCol - 1
 	for r = 1, rows do
 		local srcRow = stage.board.cells[r] or {}
 		for c = 1, columns do
 			local v = srcRow[c] or 0
-			self.board:setCell(c, r, v)
+			-- (c - colOffset - 1) % columns + 1 で列を左シフト.
+			local destCol = ((c - colOffset - 1) % columns) + 1
+			self.board:setCell(destCol, r, v)
 		end
 	end
 
-	local startCol = stage.cursorStart and stage.cursorStart.col or 1
-	local startRow = stage.cursorStart and stage.cursorStart.row or 2
-	self.board:setCursor(startCol, startRow)
+	self.board:setCursor(1, startRow)
 
 	self.gameState = GAMESTATE.PLAYING
 	self.frameCount = 0
@@ -268,6 +310,28 @@ function ModePuzzle:isClearAchieved()
 	end
 
 	return false
+end
+
+function ModePuzzle:updateStageSelect()
+	local stageCount = #self.stages
+
+	if pd.buttonJustPressed(pd.kButtonUp) or isJustPressedLeft() then
+		self.stageSelectIndex -= 1
+		if self.stageSelectIndex < 1 then
+			self.stageSelectIndex = stageCount
+		end
+	elseif pd.buttonJustPressed(pd.kButtonDown) or isJustPressedRight() then
+		self.stageSelectIndex += 1
+		if self.stageSelectIndex > stageCount then
+			self.stageSelectIndex = 1
+		end
+	end
+
+	if pd.buttonJustPressed(pd.kButtonA) then
+		self:loadStage(self.stageSelectIndex)
+	elseif pd.buttonJustPressed(pd.kButtonB) and self.onExitToTitle ~= nil then
+		self.onExitToTitle()
+	end
 end
 
 function ModePuzzle:updatePlaying()
@@ -371,13 +435,20 @@ end
 function ModePuzzle:updateResult()
 	if pd.buttonJustPressed(pd.kButtonA) then
 		self:loadStage(self.stageIndex)
-	elseif pd.buttonJustPressed(pd.kButtonB) and self.onExitToTitle ~= nil then
-		self.onExitToTitle()
+	elseif pd.buttonJustPressed(pd.kButtonB) then
+		-- ステージ選択画面に戻る.
+		self.stageSelectIndex = self.stageIndex
+		self.gameState = GAMESTATE.STAGE_SELECT
 	end
 end
 
 function ModePuzzle:update()
 	self.frameCount += 1
+
+	if self.gameState == GAMESTATE.STAGE_SELECT then
+		self:updateStageSelect()
+		return
+	end
 
 	if self.gameState == GAMESTATE.PLAYING then
 		self:updatePlaying()
@@ -425,10 +496,60 @@ function ModePuzzle:drawResultText()
 	if self.statusMessage ~= "" then
 		gfx.drawTextAligned(self.statusMessage, 200, 114, kTextAlignment.center)
 	end
-	gfx.drawTextAligned("A: RESTART  B: TITLE", 200, 136, kTextAlignment.center)
+	gfx.drawTextAligned("A: RESTART  B: SELECT", 200, 136, kTextAlignment.center)
+end
+
+function ModePuzzle:drawStageSelect()
+	gfx.drawTextAligned("STAGE SELECT", 200, 16, kTextAlignment.center)
+
+	local listX = 40
+	local listY = 46
+	local rowHeight = 24
+	local visibleCount = 7
+	local stageCount = #self.stages
+
+	-- スクロールオフセットを計算.
+	local scrollOffset = math.max(0, self.stageSelectIndex - math.ceil(visibleCount / 2))
+	scrollOffset = math.min(scrollOffset, math.max(0, stageCount - visibleCount))
+
+	for i = 1, visibleCount do
+		local stageIdx = i + scrollOffset
+		if stageIdx > stageCount then break end
+		local stage = self.stages[stageIdx]
+		local isSelected = (stageIdx == self.stageSelectIndex)
+		local y = listY + (i - 1) * rowHeight
+
+		if isSelected then
+			gfx.fillRect(listX - 4, y - 2, 320 - (listX - 4) * 2, rowHeight - 2)
+			gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+		end
+
+		local label = string.format("%d. %s", stageIdx, stage.name or stage.id or ("Stage " .. stageIdx))
+		gfx.drawText(label, listX, y + 4)
+
+		if isSelected then
+			gfx.setImageDrawMode(gfx.kDrawModeCopy)
+		end
+	end
+
+	-- スクロールインジケーター.
+	if scrollOffset > 0 then
+		gfx.drawTextAligned("▲", 200, listY - 16, kTextAlignment.center)
+	end
+	if scrollOffset + visibleCount < stageCount then
+		gfx.drawTextAligned("▼", 200, listY + visibleCount * rowHeight, kTextAlignment.center)
+	end
+
+	gfx.drawTextAligned("A: START  B: TITLE", 200, 228, kTextAlignment.center)
 end
 
 function ModePuzzle:draw()
+	-- ステージ選択画面.
+	if self.gameState == GAMESTATE.STAGE_SELECT then
+		self:drawStageSelect()
+		return
+	end
+
 	self.board:draw()
 
 	gfx.drawText("MODE: PUZZLE", 4, 20)
