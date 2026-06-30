@@ -176,10 +176,25 @@ function ModePuzzle:enter()
 
 	self.gameContext = GameContext.getInstance()
 	self.gameContext:setup()
+
+	-- システムメニューにリスタート / ステージ選択を登録.
+	local sysMenu = pd.getSystemMenu()
+	sysMenu:removeAllMenuItems()
+	sysMenu:addMenuItem("Restart", function()
+		if self.gameState ~= GAMESTATE.STAGE_SELECT then
+			self:loadStage(self.stageIndex)
+		end
+	end)
+	sysMenu:addMenuItem("Stage Select", function()
+		self.stageSelectIndex = self.stageIndex
+		self.gameState = GAMESTATE.STAGE_SELECT
+	end)
 end
 
 function ModePuzzle:exit()
 	-- BeatMachineには停止APIが未実装のため、ここでは何もしない.
+	-- システムメニューのアイテムをクリア.
+	pd.getSystemMenu():removeAllMenuItems()
 end
 
 function ModePuzzle:loadStage(index)
@@ -434,7 +449,18 @@ end
 
 function ModePuzzle:updateResult()
 	if pd.buttonJustPressed(pd.kButtonA) then
-		self:loadStage(self.stageIndex)
+		if self.gameState == GAMESTATE.GAME_CLEAR then
+			-- 次のステージへ（最後なら先頭に戻る）.
+			local nextIndex = self.stageIndex + 1
+			if nextIndex > #self.stages then
+				nextIndex = 1
+			end
+			self.stageSelectIndex = nextIndex
+			self:loadStage(nextIndex)
+		else
+			-- ゲームオーバー時はリスタート.
+			self:loadStage(self.stageIndex)
+		end
 	elseif pd.buttonJustPressed(pd.kButtonB) then
 		-- ステージ選択画面に戻る.
 		self.stageSelectIndex = self.stageIndex
@@ -496,7 +522,11 @@ function ModePuzzle:drawResultText()
 	if self.statusMessage ~= "" then
 		gfx.drawTextAligned(self.statusMessage, 200, 114, kTextAlignment.center)
 	end
-	gfx.drawTextAligned("A: RESTART  B: SELECT", 200, 136, kTextAlignment.center)
+	if self.gameState == GAMESTATE.GAME_CLEAR then
+		gfx.drawTextAligned("A: NEXT  B: SELECT", 200, 136, kTextAlignment.center)
+	else
+		gfx.drawTextAligned("A: RESTART  B: SELECT", 200, 136, kTextAlignment.center)
+	end
 end
 
 function ModePuzzle:drawStageSelect()
@@ -568,7 +598,7 @@ function ModePuzzle:draw()
 	end
 
 	gfx.drawText(self:getConditionText(), 4, 84)
-	gfx.drawText("MENU: TITLE", 4, 220)
+	gfx.drawText("MENU: RESTART / SELECT", 4, 220)
 
 	if self.gameState == GAMESTATE.GAME_CLEAR or self.gameState == GAMESTATE.GAME_OVER then
 		gfx.fillRect(90, 80, 220, 74)
