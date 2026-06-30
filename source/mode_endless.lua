@@ -202,6 +202,6 @@ function ModeEndless:draw()
 	self.board:draw()
 	self:drawTimeLimit()
 
-	gfx.drawText("MODE: ENDLESS", 4, 20)
-	gfx.drawText("MENU: TITLE", 4, 220)
+	gfx.drawText(L("endless_mode_label"), 4, 20)
+	gfx.drawText(L("endless_menu_hint"), 4, 220)
 end

@@ -2,6 +2,7 @@
 import "CoreLibs/graphics"
 import "CoreLibs/object"
 import "CoreLibs/sprites"
+import "localization"
 import "title"
 import "mode_endless"
 import "mode_puzzle"
@@ -13,9 +14,11 @@ local gfx <const> = pd.graphics
 pd.display.setRefreshRate(50)
 
 -- フォント読み込み.
---local font = gfx.font.new("fonts/misaki_gothic")
 local font = gfx.font.new("fonts/k8x12")
 pd.graphics.setFont(font)
+
+-- ローカライズ初期化（localization/ フォルダを使用）.
+Localization:init("localization")
 
 -- 現在実行中のシーン.
 local currentScene = nil
@@ -48,6 +51,17 @@ local function openTitleScene()
         end
     end)
     changeScene(titleScene)
+end
+
+-- システムメニューに言語切替を追加（タイトルシーン開始前に一度だけ設定）.
+do
+	local sysMenu = pd.getSystemMenu()
+	local langOptions = { "en", "jp" }
+	local initialLang = (Localization.language == "jp") and "jp" or "en"
+	sysMenu:addOptionsMenuItem("Language", langOptions, initialLang, function(value)
+		local lang = (value == "jp") and "jp" or "en"
+		setGameLanguage(lang)
+	end)
 end
 
 -- タイトルシーンを開始.

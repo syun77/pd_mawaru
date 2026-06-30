@@ -1,0 +1,53 @@
+{
+  "title_game_mode_select": "GAME MODE SELECT",
+  "mode_endless_name": "ENDLESS",
+  "mode_endless_desc": "Keep extending your score in standard mode",
+  "mode_puzzle_name": "PUZZLE",
+  "mode_puzzle_desc": "Clear stages within move and condition limits",
+  "ui_confirm": "A: OK",
+
+  "puzzle_stage_select": "STAGE SELECT",
+  "puzzle_select_hint": "A: START  B: TITLE",
+
+  "puzzle_mode_label": "MODE: PUZZLE",
+  "puzzle_stage_label": "STAGE: {name}",
+  "puzzle_moves_label": "MOVES: {used}/{limit}",
+  "puzzle_moves_no_limit": "MOVES: {used}",
+  "puzzle_time_label": "TIME: {sec}",
+  "puzzle_menu_hint": "MENU: RESTART / SELECT",
+
+  "cond_erase_all": "Cond: Clear All",
+  "cond_erase_panels": "Cond: Erase {count} ({progress})",
+  "cond_make_loops": "Cond: {count} Loops ({progress})",
+  "cond_wrap_loop_achieved": "Cond: Wrap Loop - Done",
+  "cond_wrap_loop_pending": "Cond: Wrap Loop - Pending",
+  "cond_erase_marked": "Cond: Erase Marked",
+  "cond_unknown": "Cond: Unknown",
+
+  "result_clear": "CLEAR",
+  "result_failed": "FAILED",
+  "result_hint_next_select": "A: NEXT  B: SELECT",
+  "result_hint_restart_select": "A: RESTART  B: SELECT",
+  "status_stage_clear": "Stage Clear",
+  "status_time_over": "Time Up",
+  "status_moves_over": "Out of Moves",
+
+  "endless_mode_label": "MODE: ENDLESS",
+  "endless_menu_hint": "MENU: TITLE",
+
+  "pause_stage": "STAGE: {name}",
+  "pause_cond_erase_all": "Cond: Clear All",
+  "pause_cond_erase_panels": "Cond: Erase {count}",
+  "pause_cond_make_loops": "Cond: {count} Loops",
+  "pause_cond_wrap_loop": "Cond: Wrap Loop",
+  "pause_cond_erase_marked": "Cond: Erase Marked",
+  "pause_erased": "Erased: {progress}/{count}",
+  "pause_loops": "Loops: {progress}/{count}",
+  "pause_wrap_loop_done": "Wrap Loop: Done",
+  "pause_wrap_loop_pending": "Wrap Loop: Pending",
+  "pause_moves": "Moves: {used}/{limit}",
+  "pause_moves_no_limit": "Moves: {used}",
+  "pause_time_left": "Time Left: {sec}s",
+  "pause_clear_banner": "** STAGE CLEAR! **",
+  "pause_failed_banner": "** FAILED **"
+}

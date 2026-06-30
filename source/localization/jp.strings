@@ -1,0 +1,60 @@
+// MAWARU - Japanese Strings
+
+// ----- タイトル -----
+"title_game_mode_select" = "ゲームモード選択"
+"mode_endless_name" = "エンドレス"
+"mode_endless_desc" = "スコアを伸ばし続ける通常モード"
+"mode_puzzle_name" = "パズル"
+"mode_puzzle_desc" = "手数や条件を達成するステージ攻略"
+"ui_confirm" = "A: 決定"
+
+// ----- ステージ選択 -----
+"puzzle_stage_select" = "ステージ選択"
+"puzzle_select_hint" = "A: スタート  B: タイトル"
+
+// ----- パズル ゲーム中 -----
+"puzzle_mode_label" = "モード: パズル"
+"puzzle_stage_label" = "ステージ: {name}"
+"puzzle_moves_label" = "手数: {used}/{limit}"
+"puzzle_moves_no_limit" = "手数: {used}"
+"puzzle_time_label" = "時間: {sec}"
+"puzzle_menu_hint" = "MENU: やり直し/選択"
+
+// ----- クリア条件 -----
+"cond_erase_all" = "条件: 全消し"
+"cond_erase_panels" = "条件: {count}枚消去 ({progress})"
+"cond_make_loops" = "条件: {count}ループ ({progress})"
+"cond_wrap_loop_achieved" = "条件: 円環ループ 達成"
+"cond_wrap_loop_pending" = "条件: 円環ループ 未達成"
+"cond_erase_marked" = "条件: マーク消去"
+"cond_unknown" = "条件: 不明"
+
+// ----- リザルト -----
+"result_clear" = "CLEAR"
+"result_failed" = "FAILED"
+"result_hint_next_select" = "A: 次へ  B: 選択"
+"result_hint_restart_select" = "A: やり直し  B: 選択"
+"status_stage_clear" = "ステージクリア"
+"status_time_over" = "時間切れ"
+"status_moves_over" = "手数切れ"
+
+// ----- エンドレスモード -----
+"endless_mode_label" = "モード: エンドレス"
+"endless_menu_hint" = "MENU: タイトル"
+
+// ----- ポーズ / メニュー画像 -----
+"pause_stage" = "ステージ: {name}"
+"pause_cond_erase_all" = "条件: 全消し"
+"pause_cond_erase_panels" = "条件: {count}枚消去"
+"pause_cond_make_loops" = "条件: {count}ループ"
+"pause_cond_wrap_loop" = "条件: 円環ループ"
+"pause_cond_erase_marked" = "条件: マーク消去"
+"pause_erased" = "消去済み: {progress}/{count}"
+"pause_loops" = "ループ数: {progress}/{count}"
+"pause_wrap_loop_done" = "円環ループ: 達成"
+"pause_wrap_loop_pending" = "円環ループ: 未達成"
+"pause_moves" = "手数: {used}/{limit}"
+"pause_moves_no_limit" = "手数: {used}"
+"pause_time_left" = "残り時間: {sec}秒"
+"pause_clear_banner" = "** ステージクリア! **"
+"pause_failed_banner" = "** 失敗 **"

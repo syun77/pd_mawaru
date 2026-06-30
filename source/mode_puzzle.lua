@@ -189,12 +189,96 @@ function ModePuzzle:enter()
 		self.stageSelectIndex = self.stageIndex
 		self.gameState = GAMESTATE.STAGE_SELECT
 	end)
+
+	-- ポーズ時にステージ情報をメニュー画像として描画.
+	playdate.gameWillPause = function()
+		self:updateMenuImage()
+	end
 end
 
 function ModePuzzle:exit()
 	-- BeatMachineには停止APIが未実装のため、ここでは何もしない.
 	-- システムメニューのアイテムをクリア.
 	pd.getSystemMenu():removeAllMenuItems()
+	-- ポーズコールバックをリセット.
+	playdate.gameWillPause = nil
+end
+
+function ModePuzzle:updateMenuImage()
+	if self.gameState == GAMESTATE.STAGE_SELECT or self.stage == nil then
+		return
+	end
+
+	local img = gfx.image.new(400, 240, gfx.kColorWhite)
+	gfx.pushContext(img)
+	gfx.setColor(gfx.kColorBlack)
+
+	local x, y = 10, 8
+	local lineH = 20
+
+	-- ステージ名.
+	gfx.drawText(LF("pause_stage", { name = self.stage.name or self.stage.id or "?" }), x, y)
+	y += lineH
+
+	-- クリア条件.
+	local cond = self.stage.clearCondition or { type = "eraseAll" }
+	local condType = cond.type or "eraseAll"
+	local count = cond.count or 1
+	local condLabel = ""
+	if condType == "eraseAll" then
+		condLabel = L("pause_cond_erase_all")
+	elseif condType == "erasePanels" then
+		condLabel = LF("pause_cond_erase_panels", { count = count })
+	elseif condType == "makeLoops" then
+		condLabel = LF("pause_cond_make_loops", { count = count })
+	elseif condType == "makeWrapLoop" then
+		condLabel = L("pause_cond_wrap_loop")
+	elseif condType == "eraseMarked" then
+		condLabel = L("pause_cond_erase_marked")
+	end
+	gfx.drawText(condLabel, x, y)
+	y += lineH
+
+	-- 進捗.
+	if condType == "erasePanels" then
+		gfx.drawText(LF("pause_erased", { progress = self.erasedPanels, count = count }), x, y)
+		y += lineH
+	elseif condType == "makeLoops" then
+		gfx.drawText(LF("pause_loops", { progress = self.loopCount, count = count }), x, y)
+		y += lineH
+	elseif condType == "makeWrapLoop" then
+		local key = self.wrapLoopMade and "pause_wrap_loop_done" or "pause_wrap_loop_pending"
+		gfx.drawText(L(key), x, y)
+		y += lineH
+	end
+
+	-- 手数.
+	local moveLimit = self.stage.rules and self.stage.rules.moveLimit
+	if moveLimit ~= nil then
+		gfx.drawText(LF("pause_moves", { used = self.movesUsed, limit = moveLimit }), x, y)
+	else
+		gfx.drawText(LF("pause_moves_no_limit", { used = self.movesUsed }), x, y)
+	end
+	y += lineH
+
+	-- 残り時間.
+	if self.timeLimitFrames ~= nil then
+		local sec = math.ceil(self.timeLimitFrames / 50)
+		gfx.drawText(LF("pause_time_left", { sec = sec }), x, y)
+		y += lineH
+	end
+
+	-- ステータス（クリア / ゲームオーバー）.
+	if self.gameState == GAMESTATE.GAME_CLEAR then
+		y += 4
+		gfx.drawText(L("pause_clear_banner"), x, y)
+	elseif self.gameState == GAMESTATE.GAME_OVER then
+		y += 4
+		gfx.drawText(L("pause_failed_banner"), x, y)
+	end
+
+	gfx.popContext()
+	pd.setMenuImage(img, 0)
 end
 
 function ModePuzzle:loadStage(index)
@@ -359,7 +443,7 @@ function ModePuzzle:updatePlaying()
 		self.timeLimitFrames -= 1
 		if self.timeLimitFrames <= 0 then
 			self.timeLimitFrames = 0
-			self.statusMessage = "時間切れ"
+			self.statusMessage = L("status_time_over")
 			self.gameState = GAMESTATE.GAME_OVER
 			return
 		end
@@ -420,14 +504,14 @@ function ModePuzzle:updateCheckErase()
 	end
 
 	if self:isClearAchieved() then
-		self.statusMessage = "ステージクリア"
+		self.statusMessage = L("status_stage_clear")
 		self.gameState = GAMESTATE.GAME_CLEAR
 		return
 	end
 
 	local moveLimit = self.stage.rules.moveLimit
 	if moveLimit ~= nil and self.movesUsed >= moveLimit then
-		self.statusMessage = "手数切れ"
+		self.statusMessage = L("status_moves_over")
 		self.gameState = GAMESTATE.GAME_OVER
 		return
 	end
@@ -497,40 +581,43 @@ function ModePuzzle:getConditionText()
 	local count = cond.count or 1
 
 	if condType == "eraseAll" then
-		return "条件: 全消し"
+		return L("cond_erase_all")
 	elseif condType == "erasePanels" then
-		return string.format("条件: %d枚消去 (%d)", count, self.erasedPanels)
+		return LF("cond_erase_panels", { count = count, progress = self.erasedPanels })
 	elseif condType == "makeLoops" then
-		return string.format("条件: %dループ作成 (%d)", count, self.loopCount)
+		return LF("cond_make_loops", { count = count, progress = self.loopCount })
 	elseif condType == "makeWrapLoop" then
-		local text = self.wrapLoopMade and "達成" or "未達成"
-		return "条件: 円環ループ " .. text
+		if self.wrapLoopMade then
+			return L("cond_wrap_loop_achieved")
+		else
+			return L("cond_wrap_loop_pending")
+		end
 	elseif condType == "eraseMarked" then
-		return "条件: マーク消去"
+		return L("cond_erase_marked")
 	end
 
-	return "条件: 不明"
+	return L("cond_unknown")
 end
 
 function ModePuzzle:drawResultText()
 	if self.gameState == GAMESTATE.GAME_CLEAR then
-		gfx.drawTextAligned("CLEAR", 200, 92, kTextAlignment.center)
+		gfx.drawTextAligned(L("result_clear"), 200, 92, kTextAlignment.center)
 	elseif self.gameState == GAMESTATE.GAME_OVER then
-		gfx.drawTextAligned("FAILED", 200, 92, kTextAlignment.center)
+		gfx.drawTextAligned(L("result_failed"), 200, 92, kTextAlignment.center)
 	end
 
 	if self.statusMessage ~= "" then
 		gfx.drawTextAligned(self.statusMessage, 200, 114, kTextAlignment.center)
 	end
 	if self.gameState == GAMESTATE.GAME_CLEAR then
-		gfx.drawTextAligned("A: NEXT  B: SELECT", 200, 136, kTextAlignment.center)
+		gfx.drawTextAligned(L("result_hint_next_select"), 200, 136, kTextAlignment.center)
 	else
-		gfx.drawTextAligned("A: RESTART  B: SELECT", 200, 136, kTextAlignment.center)
+		gfx.drawTextAligned(L("result_hint_restart_select"), 200, 136, kTextAlignment.center)
 	end
 end
 
 function ModePuzzle:drawStageSelect()
-	gfx.drawTextAligned("STAGE SELECT", 200, 16, kTextAlignment.center)
+	gfx.drawTextAligned(L("puzzle_stage_select"), 200, 16, kTextAlignment.center)
 
 	local listX = 40
 	local listY = 46
@@ -570,7 +657,7 @@ function ModePuzzle:drawStageSelect()
 		gfx.drawTextAligned("▼", 200, listY + visibleCount * rowHeight, kTextAlignment.center)
 	end
 
-	gfx.drawTextAligned("A: START  B: TITLE", 200, 228, kTextAlignment.center)
+	gfx.drawTextAligned(L("puzzle_select_hint"), 200, 228, kTextAlignment.center)
 end
 
 function ModePuzzle:draw()
@@ -582,23 +669,23 @@ function ModePuzzle:draw()
 
 	self.board:draw()
 
-	gfx.drawText("MODE: PUZZLE", 4, 20)
-	gfx.drawText("STAGE: " .. (self.stage.name or self.stage.id or "unknown"), 4, 36)
+	gfx.drawText(L("puzzle_mode_label"), 4, 20)
+	gfx.drawText(LF("puzzle_stage_label", { name = self.stage.name or self.stage.id or "?" }), 4, 36)
 
 	local moveLimit = self.stage.rules.moveLimit
 	if moveLimit ~= nil then
-		gfx.drawText(string.format("MOVES: %d/%d", self.movesUsed, moveLimit), 4, 52)
+		gfx.drawText(LF("puzzle_moves_label", { used = self.movesUsed, limit = moveLimit }), 4, 52)
 	else
-		gfx.drawText(string.format("MOVES: %d", self.movesUsed), 4, 52)
+		gfx.drawText(LF("puzzle_moves_no_limit", { used = self.movesUsed }), 4, 52)
 	end
 
 	if self.timeLimitFrames ~= nil then
 		local sec = math.ceil(self.timeLimitFrames / 50)
-		gfx.drawText(string.format("TIME: %d", sec), 4, 68)
+		gfx.drawText(LF("puzzle_time_label", { sec = sec }), 4, 68)
 	end
 
 	gfx.drawText(self:getConditionText(), 4, 84)
-	gfx.drawText("MENU: RESTART / SELECT", 4, 220)
+	gfx.drawText(L("puzzle_menu_hint"), 4, 220)
 
 	if self.gameState == GAMESTATE.GAME_CLEAR or self.gameState == GAMESTATE.GAME_OVER then
 		gfx.fillRect(90, 80, 220, 74)

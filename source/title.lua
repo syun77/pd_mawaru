@@ -10,13 +10,13 @@ class("TitleScene").extends()
 local MODE_ITEMS = {
 	{
 		id = "endless",
-		name = "ENDLESS",
-		desc = "スコアを伸ばし続ける通常モード"
+		nameKey = "mode_endless_name",
+		descKey = "mode_endless_desc",
 	},
 	{
 		id = "puzzle",
-		name = "PUZZLE",
-		desc = "手数や条件を達成するステージ攻略"
+		nameKey = "mode_puzzle_name",
+		descKey = "mode_puzzle_desc",
 	}
 }
 
@@ -85,7 +85,7 @@ function TitleScene:drawModeItem(item, index, x, y)
 		gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
 	end
 
-	gfx.drawText(item.name, x + 8, top + 7)
+	gfx.drawText(L(item.nameKey), x + 8, top + 7)
 
 	if isSelected then
 		gfx.setImageDrawMode(gfx.kDrawModeCopy)
@@ -94,7 +94,7 @@ end
 
 function TitleScene:draw()
 	gfx.drawTextAligned("MAWARU", 200, 36, kTextAlignment.center)
-	gfx.drawTextAligned("GAME MODE SELECT", 200, 56, kTextAlignment.center)
+	gfx.drawTextAligned(L("title_game_mode_select"), 200, 56, kTextAlignment.center)
 
 	local listX = 74
 	local listY = 92
@@ -106,10 +106,10 @@ function TitleScene:draw()
 
 	local selected = MODE_ITEMS[self.selectedIndex]
 	if selected ~= nil then
-		gfx.drawTextAligned(selected.desc, 200, 178, kTextAlignment.center)
+		gfx.drawTextAligned(L(selected.descKey), 200, 178, kTextAlignment.center)
 	end
 
 	if (self.frameCount % 40) < 30 then
-		gfx.drawTextAligned("A: 決定", 200, 208, kTextAlignment.center)
+		gfx.drawTextAligned(L("ui_confirm"), 200, 208, kTextAlignment.center)
 	end
 end
