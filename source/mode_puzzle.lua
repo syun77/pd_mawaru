@@ -13,6 +13,7 @@ local gfx <const> = pd.graphics
 
 class("ModePuzzle").extends()
 
+-- ゲーム状態.
 local GAMESTATE = {
 	STAGE_SELECT = -1,
 	PLAYING = 0,
@@ -23,7 +24,7 @@ local GAMESTATE = {
 	GAME_OVER = 101,
 }
 
-local CRANK_ROTATE_VALUE = 5
+-- 自動せり上がりまでの時間 (autoRiseEnabled が true の場合にのみ有効).
 local DEFAULT_AUTO_RISE_SECONDS = 30
 
 local STAGES = {
@@ -92,18 +93,20 @@ local function loadStageListFromFiles()
 	return stages
 end
 
+-- 左方向の入力判定.
 local function isJustPressedLeft()
-	if pd.isCrankDocked() then
-		return pd.buttonJustPressed(pd.kButtonLeft)
+	if pd.buttonJustPressed(pd.kButtonLeft) then
+		return true
 	end
-	return pd.getCrankChange() < -CRANK_ROTATE_VALUE
+	return false
 end
 
+-- 右方向の入力判定.
 local function isJustPressedRight()
-	if pd.isCrankDocked() then
-		return pd.buttonJustPressed(pd.kButtonRight)
+	if pd.buttonJustPressed(pd.kButtonRight) then
+		return true
 	end
-	return pd.getCrankChange() > CRANK_ROTATE_VALUE
+	return false
 end
 
 local function sumErasedPanels(eraseList)
@@ -156,6 +159,7 @@ local function parseMarkSet(markText)
 	return result
 end
 
+-- 初期化.
 function ModePuzzle:init(onExitToTitle)
 	self.onExitToTitle = onExitToTitle
 	self.stageIndex = 1
@@ -163,12 +167,15 @@ function ModePuzzle:init(onExitToTitle)
 	self.stages = {}
 end
 
+-- 開始.
 function ModePuzzle:enter()
+	-- ステージリストをロード.
 	self.stages = loadStageListFromFiles()
 	self.stageSelectIndex = 1
 	self.gameState = GAMESTATE.STAGE_SELECT
 	self.frameCount = 0
 
+	-- BGMを再生.
 	BeatMachine.Create()
 	BeatMachine.LoadBeat("beats/demo.bmf")
 	BeatMachine.PlayTheBeat(0)
@@ -181,11 +188,13 @@ function ModePuzzle:enter()
 	local sysMenu = pd.getSystemMenu()
 	sysMenu:removeAllMenuItems()
 	sysMenu:addMenuItem("Restart", function()
+		-- リスタート.
 		if self.gameState ~= GAMESTATE.STAGE_SELECT then
 			self:loadStage(self.stageIndex)
 		end
 	end)
 	sysMenu:addMenuItem("Stage Select", function()
+		-- ステージ選択画面に戻る.
 		self.stageSelectIndex = self.stageIndex
 		self.gameState = GAMESTATE.STAGE_SELECT
 	end)

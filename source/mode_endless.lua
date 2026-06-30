@@ -22,23 +22,22 @@ local GAMESTATE = {
 	SLIDEUP = 4,
 }
 
-local CRANK_ROTATE_VALUE = 5
 local TIMER_SLIDEUP <const> = 30 * 30
 
 -- 左方向の入力判定.
 local function isJustPressedLeft()
-	if pd.isCrankDocked() then
-		return pd.buttonJustPressed(pd.kButtonLeft)
+	if pd.buttonJustPressed(pd.kButtonLeft) then
+		return true
 	end
-	return pd.getCrankChange() < -CRANK_ROTATE_VALUE
+	return false
 end
 
 -- 右方向の入力判定.
 local function isJustPressedRight()
-	if pd.isCrankDocked() then
-		return pd.buttonJustPressed(pd.kButtonRight)
+	if pd.buttonJustPressed(pd.kButtonRight) then
+		return true
 	end
-	return pd.getCrankChange() > CRANK_ROTATE_VALUE
+	return false
 end
 
 -- 円形ゲージを描画.
@@ -46,8 +45,10 @@ local function drawCircularGauge(centerX, centerY, radius, ratio)
 	local startAngle = -math.pi / 2
 
 	if ratio >= 1 then
+		-- 塗りつぶす.
 		gfx.fillCircleAtPoint(centerX, centerY, radius)
 	elseif ratio > 0 then
+		-- ratioに応じた塗りつぶしを描画する.
 		local totalSegments = 64
 		local activeSegments = math.max(1, math.floor(totalSegments * ratio + 0.5))
 		local points = { centerX, centerY }
@@ -61,6 +62,7 @@ local function drawCircularGauge(centerX, centerY, radius, ratio)
 		gfx.fillPolygon(table.unpack(points))
 	end
 
+	-- 外枠の描画.
 	gfx.setLineWidth(2)
 	gfx.drawCircleAtPoint(centerX, centerY, radius)
 	gfx.setLineWidth(1)
@@ -81,6 +83,15 @@ function ModeEndless:enter()
 
 	self.gameContext = GameContext.getInstance()
 	self.gameContext:setup()
+
+	-- メニューにリスタートとタイトルに戻るを追加.
+	local sysMenu = pd.getSystemMenu()
+	sysMenu:addMenuItem("Restart", function()
+		self:enter()
+	end)
+	sysMenu:addMenuItem("Back to Title", function()
+		self.onExitToTitle()
+	end)
 
 	self.board = Board()
 	self.gameState = GAMESTATE.CHECK_SLIDEUP
@@ -117,15 +128,15 @@ function ModeEndless:updatePlaying()
 		self.board:moveCursorRight()
 		sound:play("pi")
 	elseif pd.buttonJustPressed(pd.kButtonA) then
+		-- 入れ替え.
 		self.board:swapCells(0, -1)
 		sound:play("swap")
 		self.gameState = GAMESTATE.CHECK_ERASE
 	elseif pd.buttonJustPressed(pd.kButtonB) then
+		-- スライドアップ.
 		self.board:slideUpColumn(self.board.cursorX)
 		sound:play("slideup")
 		self.gameState = GAMESTATE.SLIDEUP
-	elseif pd.buttonIsPressed(pd.kButtonA) and pd.buttonJustPressed(pd.kButtonB) and self.onExitToTitle ~= nil then
-		self.onExitToTitle()
 	end
 end
 
