@@ -67,6 +67,7 @@ local STAGES = {
 
 -- stage/ フォルダの JSON ファイルからステージリストを読み込む.
 local function loadStageListFromFiles()
+	-- stage/ フォルダ内のファイル一覧を取得.
 	local files = playdate.file.listFiles("stage") or {}
 	local stages = {}
 
@@ -75,6 +76,7 @@ local function loadStageListFromFiles()
 			local path = "stage/" .. filename
 			local data = json.decodeFile(path)
 			if data ~= nil then
+				-- jsonをデコードできたら末尾に追加.
 				stages[#stages + 1] = data
 			end
 		end
@@ -109,6 +111,7 @@ local function isJustPressedRight()
 	return false
 end
 
+-- パネル消去数の合計を求める.
 local function sumErasedPanels(eraseList)
 	local total = 0
 	if eraseList == nil then
@@ -120,6 +123,7 @@ local function sumErasedPanels(eraseList)
 	return total
 end
 
+-- 消去時に円環ができているかどうかを判定する.
 local function hasWrapLoop(eraseList, columns)
 	if eraseList == nil then
 		return false
@@ -142,6 +146,7 @@ local function hasWrapLoop(eraseList, columns)
 	return false
 end
 
+-- マークセットを解析する.
 local function parseMarkSet(markText)
 	if markText == nil or markText == "" then
 		return nil
@@ -290,6 +295,7 @@ function ModePuzzle:updateMenuImage()
 	pd.setMenuImage(img, 0)
 end
 
+-- ステージデータの読み込み.
 function ModePuzzle:loadStage(index)
 	local stage = self.stages[index]
 	if stage == nil then
@@ -370,6 +376,7 @@ function ModePuzzle:applyQueuedRiseRow()
 	end
 end
 
+-- 全消し判定.
 function ModePuzzle:isBoardCleared()
 	local columns = self.stage.board.columns
 	local rows = self.stage.board.rows
@@ -383,6 +390,7 @@ function ModePuzzle:isBoardCleared()
 	return true
 end
 
+-- マークされたパネルを全て消去したかどうかを判定.
 function ModePuzzle:isMarkedCleared()
 	if self.markSet == nil then
 		return false
@@ -392,14 +400,16 @@ function ModePuzzle:isMarkedCleared()
 		local c, r = string.match(key, "(%d+):(%d+)")
 		if c ~= nil and r ~= nil then
 			if self.board:getCell(tonumber(c), tonumber(r)) ~= 0 then
-				return false
+				return false -- マークされたパネルがまだ残っている.
 			end
 		end
 	end
 
+	-- 全て消去した.
 	return true
 end
 
+-- クリア条件を達成したかどうか.
 function ModePuzzle:isClearAchieved()
 	local cond = self.stage.clearCondition or { type = "eraseAll" }
 	local condType = cond.type or "eraseAll"

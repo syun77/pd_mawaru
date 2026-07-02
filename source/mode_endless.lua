@@ -209,6 +209,7 @@ function ModeEndless:update()
 	self.board:update()
 end
 
+-- 描画.
 function ModeEndless:draw()
 	self.board:draw()
 	self:drawTimeLimit()
